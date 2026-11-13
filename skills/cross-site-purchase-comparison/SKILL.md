@@ -23,7 +23,7 @@ Do **not** use it to claim achieved savings, to compare across specifications no
 
 | Input | What it is | Changes per client? |
 |---|---|---|
-| Plant exports | One `.xlsx` per plant (header row anywhere in the first 30 rows; total rows allowed) | Yes |
+| Plant exports | One `.xlsx` or `.csv` per plant (header row anywhere in the first 30 rows; total rows allowed). If the platform turns uploaded workbooks into text, export each as CSV instead | Yes |
 | `scope.json` | Category, reporting currency, comparison window, list of files and plants, optional `date_format` per file | Yes |
 | `rules/columns.json` | Which column headers mean which standard field | Add the client's header names |
 | `rules/specs.csv`, `item_map.csv` | Approved specifications, and which plant item code or description is which specification | Yes (a buyer approves) |
@@ -38,9 +38,19 @@ Templates and a worked example are in `examples/synthetic/`.
 
 ## How to run
 
+**Demo (bundled synthetic data, nothing to upload).** Run the three gate stages in order. Show the exact command and full output of each:
+```
+python3 scripts/run.py --example 0csv --out out/    # stops at Gate 1 (exit 2)
+python3 scripts/run.py --example 1csv --out out/    # Gate 1 confirmed -> DRAFT workbook
+python3 scripts/run.py --example 2csv --out out/    # all gates closed -> FINAL workbook
+```
+(`--example 0`, `1`, `2` do the same with the `.xlsx` copies. Use the `csv` form if the platform cannot give scripts real binary workbooks.)
+
+**Real run (uploaded files).**
 ```
 python3 scripts/run.py --scope scope.json --rules rules/ --decisions decisions.json --out out/
 ```
+All input paths must sit in the working folder or the folder holding `scope.json`; `--out` must be a folder inside them.
 Needs Python 3.10+ and `openpyxl`. Exit codes: `0` workbook written | `1` input or rules error | `2` stopped at Gate 1 | `3` reconciliation failed | `4` release checks failed (no workbook).
 
 ## The flow  (code does everything except the three decisions)
@@ -71,7 +81,7 @@ Needs Python 3.10+ and `openpyxl`. Exit codes: `0` workbook written | `1` input 
 Change only: the plant exports, `scope.json`, the rules pack (headers, specifications and item map, unit conversions, FX, bands) and `decisions.json`. No code changes. Replace the synthetic rules with the client's; never put client data in this folder.
 
 ## Limits of v0.1.0  (be honest with the client)
-- One category (packaging labels), one price basis (per 1,000 labels), `.xlsx` only.
+- One category (packaging labels), one price basis (per 1,000 labels), `.xlsx` or `.csv` input.
 - Savings are scenarios. They don't confirm that a price is available at another plant's volume, location or terms. A buyer must confirm.
 - Column mapping uses exact aliases plus a person; there is no fuzzy header guessing.
 - Match *proposals* use simple word overlap. They are suggestions for Gate 2, never decisions.

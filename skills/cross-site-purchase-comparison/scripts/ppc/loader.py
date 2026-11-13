@@ -2,6 +2,7 @@
 reconcile row counts and totals back to the source file. Originals are opened read-only."""
 from __future__ import annotations
 
+import csv
 import datetime as dt
 import os
 import re
@@ -13,6 +14,44 @@ from .model import Line
 from .rules import Rules, norm_text
 
 TOTAL_RE = re.compile(r"\b(grand\s*total|sub\s*-?\s*total|total)\b", re.I)
+
+
+class _Cell:
+    def __init__(self, value):
+        self.value = value
+
+
+class _CsvSheet:
+    """Minimal stand-in for an openpyxl worksheet, so CSV exports go through the same code path."""
+    def __init__(self, title, rows):
+        self.title, self._rows = title, rows
+        self.max_row = len(rows)
+
+    def iter_rows(self, min_row=1, max_row=None, values_only=True):
+        last = len(self._rows) if max_row is None else min(max_row, len(self._rows))
+        for r in self._rows[min_row - 1:last]:
+            yield tuple(r)
+
+    def __getitem__(self, row_number):
+        return [_Cell(v) for v in self._rows[row_number - 1]]
+
+
+class _CsvBook:
+    def __init__(self, path):
+        with open(path, newline="", encoding="utf-8-sig") as fh:
+            rows = [[(c if c != "" else None) for c in r] for r in csv.reader(fh)]
+        width = max((len(r) for r in rows), default=0)
+        rows = [r + [None] * (width - len(r)) for r in rows]
+        self.worksheets = [_CsvSheet(os.path.splitext(os.path.basename(path))[0], rows)]
+
+    def close(self):
+        pass
+
+
+def _open_book(path):
+    if path.lower().endswith(".csv"):
+        return _CsvBook(path)
+    return load_workbook(path, read_only=False, data_only=True)
 
 
 def _cell_text(v) -> str:
@@ -78,7 +117,7 @@ def load_file(plant: str, path: str, rules: Rules, overrides: dict, date_format:
     if not os.path.isfile(path):
         fr.errors.append(f"File not found: {path}")
         return fr
-    wb = load_workbook(path, read_only=False, data_only=True)
+    wb = _open_book(path)
     found = _find_sheet_and_header(wb, rules)
     if not found or found[2] < 2:
         fr.errors.append("Could not find a header row (fewer than 2 known column names in the first 30 rows)")

@@ -1,0 +1,28 @@
+{
+  "project": "SYNTHETIC-DEMO (no client data)",
+  "category": "packaging-labels",
+  "reporting_currency": "USD",
+  "window": {
+    "start": "2025-11-01",
+    "end": "2026-10-31"
+  },
+  "files": [
+    {
+      "plant": "Plant A",
+      "path": "inputs_csv/plant_A_purchases.csv"
+    },
+    {
+      "plant": "Plant B",
+      "path": "inputs_csv/plant_B_export.csv"
+    },
+    {
+      "plant": "Plant C",
+      "path": "inputs_csv/plant_C_report.csv"
+    },
+    {
+      "plant": "Plant D",
+      "path": "inputs_csv/plant_D_extract.csv",
+      "date_format": "%d.%m.%Y"
+    }
+  ]
+}

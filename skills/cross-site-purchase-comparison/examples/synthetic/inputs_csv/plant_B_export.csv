@@ -1,0 +1,9 @@
+Date,Item No,Item Text,Quantity,Unit,Unit Price,Currency,Supplier Name,Delivery Terms,Line Total
+2025-11-20,880021,"White label, specification X",500,ROLL-1000,60,USD,Vendor 2,DAP,30000
+2026-01-12,880021,"White label, specification X",,ROLL-1000,60,USD,Vendor 2,DAP,
+2026-02-18,880021,"White label, specification X",500,ROLL-1000,60,USD,Vendor 2,DAP,30000
+2026-04-01,880021,"White label, specification X",10,ROLL-1000,75,USD,Vendor 2,DAP,750
+2026-05-20,880021,"White label, specification X",500,ROLL-1000,60,USD,Vendor 2,DAP,30000
+2026-07-07,880021,"White label, specification X",300,ROLL-1000,52,USD,Vendor 2,EXW,15600
+2026-08-19,880021,"White label, specification X",500,ROLL-1000,60,USD,Vendor 2,DAP,30000
+Grand Total,,,,,,,,,136350

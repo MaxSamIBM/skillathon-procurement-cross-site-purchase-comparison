@@ -15,6 +15,7 @@ import sys
 from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 from ppc import __version__  # noqa: E402
 from ppc.compare import apply_window, assign_conditions, build_groups, normalize, rank  # noqa: E402
@@ -25,7 +26,7 @@ from ppc.rules import Rules, RulesError, sha256_file  # noqa: E402
 from ppc.safepath import PathError, child  # noqa: E402
 from ppc import workbook  # noqa: E402
 
-ALLOWED_INPUT_EXT = (".xlsx", ".xlsm")
+ALLOWED_INPUT_EXT = (".xlsx", ".xlsm", ".csv")
 
 
 def safe_input_path(base: str, rel: str) -> str:
@@ -41,7 +42,7 @@ def safe_input_path(base: str, rel: str) -> str:
         raise RulesError(f"File path '{rel}' in scope is outside the scope file's folder; "
                          "put input files next to scope.json (or in a subfolder) and use a relative path")
     if not cand.lower().endswith(ALLOWED_INPUT_EXT):
-        raise RulesError(f"File '{rel}' is not an Excel workbook (.xlsx or .xlsm)")
+        raise RulesError(f"File '{rel}' is not an Excel workbook or CSV (.xlsx, .xlsm or .csv)")
     return cand
 
 
@@ -206,14 +207,27 @@ def run(scope_path, rules_dir, decisions_path, out_dir) -> dict:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--scope", required=True)
-    ap.add_argument("--rules", required=True)
+    ap.add_argument("--scope", default="")
+    ap.add_argument("--rules", default="")
     ap.add_argument("--decisions", default="")
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", default="out")
+    ap.add_argument("--example", choices=["0", "1", "2", "0csv", "1csv", "2csv"], default="",
+                    help="run the bundled synthetic demo at gate stage 0, 1 or 2 (suffix 'csv' uses the CSV copies)")
     a = ap.parse_args(argv)
+    if a.example:
+        ex = os.path.join(SKILL_DIR, "examples", "synthetic")
+        stage = {"0": "decisions_0_start.json", "1": "decisions_1_scope_confirmed.json",
+                 "2": "decisions_2_signed_off.json"}[a.example[0]]
+        a.scope = os.path.join(ex, "scope_csv.json" if a.example.endswith("csv") else "scope.json")
+        a.rules = os.path.join(ex, "rules")
+        a.decisions = os.path.join(ex, stage)
+    elif not (a.scope and a.rules):
+        ap.error("give --scope and --rules, or use --example")
     try:
         scope_real = os.path.realpath(a.scope)
         roots = [os.getcwd(), os.path.dirname(scope_real)]
+        if a.example:
+            roots.append(os.path.join(SKILL_DIR, "examples"))  # the bundled synthetic demo may be read from here
         a.scope = confine(a.scope, roots, "Scope file")
         a.rules = confine(a.rules, roots, "Rules folder")
         a.decisions = confine(a.decisions, roots, "Decisions file") if a.decisions else ""

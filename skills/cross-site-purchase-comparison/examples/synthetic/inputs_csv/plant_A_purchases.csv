@@ -1,0 +1,7 @@
+PO Date,Material,Material Description,Order Qty,UoM,Net Price,Curr,Vendor,Incoterm,Net Value
+2025-09-15,A-1001,"Product label, white, specification X",500,ROLL-500,35,USD,Vendor 1,DAP,17500
+2025-12-05,A-1001,"Product label, white, specification X",1000,ROLL-500,35,USD,Vendor 1,DAP,35000
+2026-03-04,A-1001,"Product label, white, specification X",1000,ROLL-500,35,USD,Vendor 1,DAP,35000
+2026-06-10,A-1001,"Product label, white, specification X",1000,ROLL-500,35,USD,Vendor 1,DAP,35000
+2026-09-09,A-1001,"Product label, white, specification X",1000,ROLL-500,35,USD,Vendor 1,DAP,35000
+Total,,,,,,,,,157500
