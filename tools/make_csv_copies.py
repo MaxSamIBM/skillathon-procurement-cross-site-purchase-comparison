@@ -1,9 +1,10 @@
-"""Writes CSV copies of the four synthetic plant workbooks (first sheet of each) plus scope_csv.json.
+"""Maintainer tool (not part of the skill package). Writes CSV copies of the four synthetic plant workbooks (first sheet of each) plus scope_csv.json.
 Use these when a platform turns uploaded .xlsx files into text. Synthetic data only."""
 import csv, datetime as dt, json, os
 from openpyxl import load_workbook
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "skills", "cross-site-purchase-comparison", "examples", "synthetic")
 SRC, DST = os.path.join(HERE, "inputs"), os.path.join(HERE, "inputs_csv")
 os.makedirs(DST, exist_ok=True)
 

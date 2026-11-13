@@ -49,9 +49,15 @@ class _CsvBook:
 
 
 def _open_book(path):
-    if path.lower().endswith(".csv"):
-        return _CsvBook(path)
-    return load_workbook(path, read_only=False, data_only=True)
+    # Canonicalise and re-check at the point of use (run.py has already confined the path to the
+    # scope folder): resolve symlinks, require an existing regular file with an allowed extension.
+    real = os.path.realpath(path)
+    ext = os.path.splitext(real)[1].lower()
+    if ext not in (".xlsx", ".xlsm", ".csv") or not os.path.isfile(real):
+        raise ValueError(f"Not a readable .xlsx/.xlsm/.csv file: {os.path.basename(path)}")
+    if ext == ".csv":
+        return _CsvBook(real)
+    return load_workbook(real, read_only=False, data_only=True)
 
 
 def _cell_text(v) -> str:
