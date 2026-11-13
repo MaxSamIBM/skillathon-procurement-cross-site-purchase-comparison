@@ -216,5 +216,43 @@ class TestRules(unittest.TestCase):
         self.assertNotEqual(self.r.canonical_spec("SPEC-X"), self.r.canonical_spec("SPEC-Y"))
 
 
+class TestPathSafety(unittest.TestCase):
+    """scope.json must not be able to point the skill at files outside its own folder."""
+
+    def _scope(self, path):
+        tmp = tempfile.mkdtemp(prefix="ppc_path_")
+        shutil.copytree(EX, os.path.join(tmp, "ex"))
+        ex = os.path.join(tmp, "ex")
+        import json as _json
+        sc = _json.load(open(os.path.join(ex, "scope.json")))
+        sc["files"][0]["path"] = path
+        _json.dump(sc, open(os.path.join(ex, "scope.json"), "w"))
+        return ex
+
+    def _run_expect_error(self, path):
+        ex = self._scope(path)
+        with self.assertRaises(RulesError):
+            runner.run(os.path.join(ex, "scope.json"), os.path.join(ex, "rules"),
+                       os.path.join(ex, "decisions_2_signed_off.json"), tempfile.mkdtemp())
+
+    def test_parent_directory_is_rejected(self):
+        self._run_expect_error("../../etc/passwd")
+
+    def test_absolute_path_is_rejected(self):
+        self._run_expect_error("/etc/passwd")
+
+    def test_non_excel_file_is_rejected(self):
+        self._run_expect_error("rules/settings.json")
+
+    def test_symlink_escape_is_rejected(self):
+        ex = self._scope("inputs/link.xlsx")
+        outside = os.path.join(tempfile.mkdtemp(), "outside.xlsx")
+        shutil.copy(os.path.join(ex, "inputs", "plant_A_purchases.xlsx"), outside)
+        os.symlink(outside, os.path.join(ex, "inputs", "link.xlsx"))
+        with self.assertRaises(RulesError):
+            runner.run(os.path.join(ex, "scope.json"), os.path.join(ex, "rules"),
+                       os.path.join(ex, "decisions_2_signed_off.json"), tempfile.mkdtemp())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

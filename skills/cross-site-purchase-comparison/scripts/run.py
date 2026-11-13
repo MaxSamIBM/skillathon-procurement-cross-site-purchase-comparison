@@ -24,6 +24,25 @@ from ppc.release import release_checks  # noqa: E402
 from ppc.rules import Rules, RulesError, sha256_file  # noqa: E402
 from ppc import workbook  # noqa: E402
 
+ALLOWED_INPUT_EXT = (".xlsx", ".xlsm")
+
+
+def safe_input_path(base: str, rel: str) -> str:
+    """Resolve a file path from scope.json and refuse anything outside the scope file's folder.
+
+    Absolute paths, '..' segments and symlinks that leave the folder are rejected, so a scope file
+    cannot make the skill read arbitrary files."""
+    if not isinstance(rel, str) or not rel.strip() or "\x00" in rel:
+        raise RulesError(f"Invalid file path in scope: {rel!r}")
+    base_real = os.path.realpath(base)
+    cand = os.path.realpath(os.path.join(base_real, rel))
+    if os.path.isabs(rel) or os.path.commonpath([base_real, cand]) != base_real:
+        raise RulesError(f"File path '{rel}' in scope is outside the scope file's folder; "
+                         "put input files next to scope.json (or in a subfolder) and use a relative path")
+    if not cand.lower().endswith(ALLOWED_INPUT_EXT):
+        raise RulesError(f"File '{rel}' is not an Excel workbook (.xlsx or .xlsm)")
+    return cand
+
 
 def _json_default(o):
     if isinstance(o, Decimal):
@@ -76,9 +95,11 @@ def run(scope_path, rules_dir, decisions_path, out_dir) -> dict:
 
     # ---------------- Steps 2-3: map columns, load, reconcile
     files = []
+    resolved_paths = []
     overrides = decisions.get("column_overrides", {})
     for f in scope["files"]:
-        path = f["path"] if os.path.isabs(f["path"]) else os.path.join(base, f["path"])
+        path = safe_input_path(base, f.get("path"))
+        resolved_paths.append(path)
         fr = load_file(f["plant"], path, rules, overrides.get(f["plant"], {}), f.get("date_format"))
         if not fr.errors and not fr.missing_required:
             reconcile(fr, rules)
@@ -86,8 +107,8 @@ def run(scope_path, rules_dir, decisions_path, out_dir) -> dict:
 
     report["inputs"] = {
         "files": [{"plant": fr.plant, "file": fr.file,
-                   "sha256": sha256_file(os.path.join(base, f["path"])) if os.path.isfile(os.path.join(base, f["path"])) else None}
-                  for fr, f in zip(files, scope["files"])],
+                   "sha256": sha256_file(p) if os.path.isfile(p) else None}
+                  for fr, p in zip(files, resolved_paths)],
         "rules_sha256": rules.fingerprints,
     }
     report["files"] = [{"plant": fr.plant, "file": fr.file, "sheet": fr.sheet, "header_row": fr.header_row,
