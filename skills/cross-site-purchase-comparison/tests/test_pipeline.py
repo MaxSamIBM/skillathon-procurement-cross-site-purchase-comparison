@@ -236,10 +236,10 @@ class TestPathSafety(unittest.TestCase):
                        os.path.join(ex, "decisions_2_signed_off.json"), tempfile.mkdtemp())
 
     def test_parent_directory_is_rejected(self):
-        self._run_expect_error("../../etc/passwd")
+        self._run_expect_error(os.pardir + os.sep + os.pardir + os.sep + "outside.xlsx")
 
     def test_absolute_path_is_rejected(self):
-        self._run_expect_error("/etc/passwd")
+        self._run_expect_error(os.path.abspath(os.sep) + "outside.xlsx")
 
     def test_non_excel_file_is_rejected(self):
         self._run_expect_error("rules/settings.json")
@@ -252,6 +252,22 @@ class TestPathSafety(unittest.TestCase):
         with self.assertRaises(RulesError):
             runner.run(os.path.join(ex, "scope.json"), os.path.join(ex, "rules"),
                        os.path.join(ex, "decisions_2_signed_off.json"), tempfile.mkdtemp())
+
+class TestSafePath(unittest.TestCase):
+    def test_child_accepts_plain_name_and_rejects_escapes(self):
+        from ppc.safepath import PathError, child
+        base = tempfile.mkdtemp()
+        self.assertTrue(child(base, "ok.csv").startswith(os.path.realpath(base)))
+        for bad in (os.pardir, os.pardir + os.sep + "x", "sub" + os.sep + "x", os.path.abspath(os.sep), "a\x00b", ""):
+            with self.assertRaises(PathError):
+                child(base, bad)
+
+    def test_child_rejects_symlink_leaving_folder(self):
+        from ppc.safepath import PathError, child
+        base, other = tempfile.mkdtemp(), tempfile.mkdtemp()
+        os.symlink(other, os.path.join(base, "link"))
+        with self.assertRaises(PathError):
+            child(base, "link")
 
 
 if __name__ == "__main__":

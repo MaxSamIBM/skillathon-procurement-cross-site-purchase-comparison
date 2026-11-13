@@ -22,6 +22,7 @@ from ppc.loader import load_file, reconcile  # noqa: E402
 from ppc.matching import match_lines  # noqa: E402
 from ppc.release import release_checks  # noqa: E402
 from ppc.rules import Rules, RulesError, sha256_file  # noqa: E402
+from ppc.safepath import PathError, child  # noqa: E402
 from ppc import workbook  # noqa: E402
 
 ALLOWED_INPUT_EXT = (".xlsx", ".xlsm")
@@ -143,7 +144,7 @@ def run(scope_path, rules_dir, decisions_path, out_dir) -> dict:
     if g1_open:
         report["status"] = "STOPPED_AT_GATE_1"
         report["gate1_open"] = g1_open
-        _dump(os.path.join(out_dir, "run_report.json"), report)
+        _dump(child(out_dir, "run_report.json"), report)
         return report
 
     bad_recon = [f"{fr.plant} ({fr.file}): rows {fr.recon['row_check']}, totals {fr.recon['total_check']} "
@@ -152,7 +153,7 @@ def run(scope_path, rules_dir, decisions_path, out_dir) -> dict:
     if bad_recon:
         report["status"] = "STOPPED_RECONCILIATION"
         report["reconciliation_failures"] = bad_recon
-        _dump(os.path.join(out_dir, "run_report.json"), report)
+        _dump(child(out_dir, "run_report.json"), report)
         return report
 
     lines = [ln for fr in files for ln in fr.lines]
@@ -176,7 +177,7 @@ def run(scope_path, rules_dir, decisions_path, out_dir) -> dict:
     report["counts"]["lines_loaded"] = len(lines)
     if any(c["result"] == "FAIL" for c in checks):
         report["status"] = "BLOCKED_RELEASE_CHECKS"
-        _dump(os.path.join(out_dir, "run_report.json"), report)
+        _dump(child(out_dir, "run_report.json"), report)
         return report
 
     g3 = decisions.get("gate3", {})
@@ -196,10 +197,10 @@ def run(scope_path, rules_dir, decisions_path, out_dir) -> dict:
 
     # ---------------- Step 9: workbook
     name = f"price_comparison_{status.lower()}.xlsx"
-    wb_path = os.path.join(out_dir, name)
+    wb_path = child(out_dir, name)
     workbook.write(wb_path, status, scope, files, lines, opps, group_rows, queue, checks, gate_log, __version__)
     report["workbook"] = name
-    _dump(os.path.join(out_dir, "run_report.json"), report)
+    _dump(child(out_dir, "run_report.json"), report)
     return report
 
 
@@ -218,7 +219,7 @@ def main(argv=None):
         a.decisions = confine(a.decisions, roots, "Decisions file") if a.decisions else ""
         a.out = confine(a.out, roots, "Output folder")
         rep = run(a.scope, a.rules, a.decisions, a.out)
-    except RulesError as e:
+    except (RulesError, PathError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
     st = rep["status"]
@@ -233,7 +234,7 @@ def main(argv=None):
     for q in rep.get("gate2_queue", []):
         print(f"  Gate 2: {q['plant']} '{q['description']}' -> {q['proposed_spec'] or '?'} ({q['status']}, {q['score']})")
     if rep.get("workbook"):
-        print(f"Workbook: {os.path.join(a.out, rep['workbook'])}")
+        print(f"Workbook: {a.out.rstrip('/')}/{rep['workbook']}")
     return {"STOPPED_AT_GATE_1": 2, "STOPPED_RECONCILIATION": 3, "BLOCKED_RELEASE_CHECKS": 4}.get(st, 0)
 
 

@@ -8,6 +8,8 @@ import os
 import re
 from decimal import Decimal, InvalidOperation
 
+from .safepath import PathError, child
+
 
 class RulesError(Exception):
     """The rules pack is missing a file or contains something unusable."""
@@ -46,9 +48,9 @@ class Rules:
             raise RulesError(f"Rules folder not found: {folder}")
         self.folder = folder
         for name in self.FILES:
-            if not os.path.isfile(os.path.join(folder, name)):
+            if not os.path.isfile(child(folder, name)):
                 raise RulesError(f"Rules pack is missing '{name}' (folder: {folder})")
-        self.fingerprints = {n: sha256_file(os.path.join(folder, n)) for n in self.FILES}
+        self.fingerprints = {n: sha256_file(child(folder, n)) for n in self.FILES}
 
         # ---- columns
         cols = self._json("columns.json")
@@ -130,13 +132,13 @@ class Rules:
     # ------------------------------------------------------------------ helpers
     def _json(self, name):
         try:
-            with open(os.path.join(self.folder, name), encoding="utf-8") as f:
+            with open(child(self.folder, name), encoding="utf-8") as f:
                 return json.load(f)
-        except (ValueError, KeyError) as e:
+        except (ValueError, KeyError, PathError) as e:
             raise RulesError(f"{name} is not valid: {e}")
 
     def _csv(self, name, required_cols):
-        path = os.path.join(self.folder, name)
+        path = child(self.folder, name)
         with open(path, newline="", encoding="utf-8-sig") as f:
             rd = csv.DictReader(f)
             missing = [c for c in required_cols if c not in (rd.fieldnames or [])]
