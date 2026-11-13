@@ -36,7 +36,11 @@ Do **not** use it to claim achieved savings, to compare across specifications no
 
 Templates and a worked example are in `examples/synthetic/`.
 
-## How to run
+## Process Studio entry point
+
+`generate_cross_site_purchase_comparison.py` is at the skill root as the auto-executable `generate_*` entry point. It delegates to the same tested pipeline as the local CLI. The callable accepts `scope_path`, `rules_dir`, optional `decisions_path`, and optional `out_dir` (default `out`), and returns a JSON summary. Provide file paths inside the project working folder; the script applies the same path-confinement checks as the CLI. If the Process Studio runner supplies a different input contract, adapt this thin entry point only; do not bypass validation.
+
+## How to run locally
 
 **Demo (bundled synthetic data, nothing to upload).** Run the three gate stages in order. Show the exact command and full output of each:
 ```
@@ -89,4 +93,4 @@ Change only: the plant exports, `scope.json`, the rules pack (headers, specifica
 - Variance analysis itself isn't new (procurement suites offer it). What's new here is the comparability method for inconsistent exports and the guarantees above. **A search of existing Process Studio skills and public assets has not been done yet.**
 
 ## Files
-`scripts/run.py` (CLI) · `scripts/ppc/` (loader, matching, compare, release, workbook, rules) · `tests/` (23 tests) · `examples/synthetic/` (4 messy plant files, rules pack, 3 decision stages, hand-calculated expected results, `TRAPS.md`).
+`generate_cross_site_purchase_comparison.py` (Process Studio `generate_*` entry point) · `scripts/run.py` (local CLI) · `scripts/ppc/` (loader, matching, compare, release, workbook, rules) · `tests/` (29 tests) · `examples/synthetic/` (synthetic plant files, rules pack, 3 decision stages, hand-calculated expected results, `TRAPS.md`).
