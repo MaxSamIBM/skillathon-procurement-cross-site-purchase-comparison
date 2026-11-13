@@ -39,9 +39,22 @@ class TestGates(unittest.TestCase):
         rep, _ = _run("decisions_0_start.json")
         self.assertEqual(rep["status"], EXPECTED["start_run"]["status"])
         text = " ".join(rep["gate1_open"])
-        self.assertIn("Order Qty (M)", text)          # trap 4: unknown headers go to a person
+        self.assertNotIn("Order Qty (M)", text)      # known alias; no column override needed
+        self.assertNotIn("Price per M", text)
         self.assertIn("Scope not confirmed", text)
         self.assertNotIn("workbook", rep)             # nothing produced before Gate 1
+
+    def test_plant_d_headers_map_without_gate_1_column_override(self):
+        rep, _ = _run("decisions_0_start.json")
+        plant_d = next(f for f in rep["files"] if f["plant"] == "Plant D")
+        self.assertEqual(plant_d["mapping"].get("Order Qty (M)"), "quantity")
+        self.assertEqual(plant_d["mapping"].get("Price per M"), "unit_price")
+        self.assertEqual(plant_d["mapping_basis"].get("Order Qty (M)"), "alias")
+        self.assertEqual(plant_d["mapping_basis"].get("Price per M"), "alias")
+        self.assertEqual(plant_d["missing_required"], [])
+        self.assertFalse(any("Plant D" in item and "required field(s)" in item
+                             for item in rep["gate1_open"]))
+        self.assertTrue(any("Scope not confirmed" in item for item in rep["gate1_open"]))
 
     def test_draft_holds_back_unapproved_match(self):
         rep, out = _run("decisions_1_scope_confirmed.json")

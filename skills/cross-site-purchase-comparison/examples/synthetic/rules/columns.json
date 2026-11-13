@@ -1,14 +1,14 @@
 {
-  "_doc": "Maps each plant's column headers to the standard fields. Headers are compared after lower-casing and replacing punctuation with spaces. Exact match only. Anything not listed must be mapped by a person in decisions.json > column_overrides at Gate 1.",
+  "_doc": "Maps each plant's column headers to the standard fields. Headers are compared after lower-casing and replacing punctuation with spaces. Exact match only. Anything not listed must be mapped by a person in decisions.json > column_overrides at Gate 1. Header aliases do not define purchase-unit meaning; unit conversions are determined only by unit_conversions.csv.",
   "required": ["date", "description", "quantity", "purchase_unit", "unit_price", "currency"],
   "optional": ["item_code", "supplier", "freight_terms", "line_amount"],
   "aliases": {
     "date": ["po date", "date", "posting date", "order date", "doc date"],
     "item_code": ["material", "item no", "mat code", "item code", "material number", "mat no"],
     "description": ["material description", "item text", "mat desc", "description", "short text", "item description"],
-    "quantity": ["order qty", "quantity", "qty", "po quantity"],
+    "quantity": ["order qty", "order qty m", "quantity", "qty", "po quantity"],
     "purchase_unit": ["uom", "unit", "oun", "order unit", "purchase unit"],
-    "unit_price": ["net price", "unit price", "price"],
+    "unit_price": ["net price", "unit price", "price", "price per m"],
     "currency": ["curr", "currency", "crcy", "cur"],
     "supplier": ["vendor", "supplier name", "supplier", "vendor name"],
     "freight_terms": ["incoterm", "delivery terms", "inco terms", "incoterms", "incot"],
