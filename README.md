@@ -2,16 +2,17 @@
 
 Compares what different plants pay for the same packaging item. It takes messy purchase exports from several plants, works out which purchases can **fairly** be compared, and returns ranked price differences worth investigating. Every number traces to a source row. Anything uncertain goes to a person.
 
-Read [`skills/cross-site-purchase-comparison/SKILL.md`](skills/cross-site-purchase-comparison/SKILL.md) for triggers, inputs, outputs, the flow and the limits.
+Read [`skills/cross-site-purchase-comparison/SKILL.md`](skills/cross-site-purchase-comparison/SKILL.md) for workflow metadata, chat invocation guidance, triggers, inputs, outputs, the flow and the limits.
 
 ## Repository layout
 
 ```
 skills/cross-site-purchase-comparison/
-  SKILL.md      skill definition
-  generate_cross_site_purchase_comparison.py, run.py, ppc/   self-contained workflow entry point and local modules
+  SKILL.md      workflow instructions and metadata
+  scripts/      deterministic generate_* entry point
+  run.py, ppc/  local runner and bundled modules
   examples/     synthetic plant files, rules pack, decision stages, expected results
-  tests/        29 tests
+  tests/        pipeline and entry-point tests
 ```
 
 ## Try it in a minute (synthetic data, no client data)

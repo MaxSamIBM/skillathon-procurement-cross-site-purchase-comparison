@@ -1,59 +1,38 @@
-"""Best-effort conventional entry-point adapter tests."""
+"""Tests for the deterministic Process Studio entry point."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
-import sys
 import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-
-import generate  # noqa: E402
-
+ENTRY_PATH = os.path.join(ROOT, "scripts", "generate_cross_site_purchase_comparison.py")
 EX = os.path.join(ROOT, "examples", "synthetic")
 
+_spec = importlib.util.spec_from_file_location("ppc_process_studio_entry", ENTRY_PATH)
+if _spec is None or _spec.loader is None:
+    raise ImportError(f"Could not load Process Studio entry point: {ENTRY_PATH}")
+entry = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(entry)
 
-class TestGenerateAdapter(unittest.TestCase):
-    def test_staged_path_list_runs_existing_pipeline(self):
-        paths = [
-            os.path.join(EX, "scope.json"),
-            os.path.join(EX, "rules"),
-            os.path.join(EX, "decisions_1_scope_confirmed.json"),
-        ]
+
+class TestGenerateEntryPoint(unittest.TestCase):
+    def test_script_is_in_discoverable_scripts_folder(self):
+        self.assertTrue(os.path.isfile(ENTRY_PATH))
+        self.assertEqual(os.path.basename(ENTRY_PATH), "generate_cross_site_purchase_comparison.py")
+
+    def test_entry_runs_existing_pipeline(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as out:
-            # Staged paths are supplied in the payload; output remains confined to the
-            # project working folder by the adapter's path policy.
-            result = json.loads(generate.generate(paths, out_dir=out))
-            self.assertEqual(result["status"], "DRAFT")
+            result = json.loads(entry.generate_cross_site_purchase_comparison(
+                os.path.join(EX, "scope.json"),
+                os.path.join(EX, "rules"),
+                os.path.join(EX, "decisions_0_start.json"),
+                out,
+            ))
+            self.assertEqual(result["status"], "STOPPED_AT_GATE_1")
             self.assertTrue(os.path.isfile(os.path.join(out, "run_report.json")))
-            self.assertTrue(os.path.isfile(os.path.join(out, "price_comparison_draft.xlsx")))
-
-    def test_discovers_scope_rules_and_decisions_from_working_directory(self):
-        old_cwd = os.getcwd()
-        with tempfile.TemporaryDirectory(dir=ROOT) as work:
-            import shutil
-            shutil.copy2(os.path.join(EX, "scope.json"), work)
-            shutil.copy2(os.path.join(EX, "decisions_0_start.json"), os.path.join(work, "decisions.json"))
-            shutil.copytree(os.path.join(EX, "rules"), os.path.join(work, "rules"))
-            shutil.copytree(os.path.join(EX, "inputs"), os.path.join(work, "inputs"))
-            os.chdir(work)
-            try:
-                result = json.loads(generate.generate())
-                self.assertEqual(result["status"], "STOPPED_AT_GATE_1")
-                self.assertTrue(os.path.isfile(os.path.join(work, "out", "run_report.json")))
-            finally:
-                os.chdir(old_cwd)
-
-    def test_rejects_path_outside_working_directory(self):
-        outside = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
-        outside.close()
-        try:
-            with self.assertRaises(ValueError):
-                generate.generate({"scope_path": outside.name})
-        finally:
-            os.unlink(outside.name)
 
 
 if __name__ == "__main__":

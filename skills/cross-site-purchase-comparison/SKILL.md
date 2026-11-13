@@ -6,6 +6,7 @@ description: >
   returns ranked price gaps as savings SCENARIOS with the source rows behind every number. Anything
   uncertain goes to a person; nothing is guessed. Use before a supplier negotiation, sourcing review or
   cost-reduction workshop.
+type: workflow
 ---
 
 # cross-site-purchase-comparison  (v0.1.0)
@@ -16,6 +17,8 @@ description: >
 
 ## When to use it
 Trigger phrases: "compare packaging prices across plants", "price variance by plant", "are we paying different prices for the same label", "prepare the sourcing workshop price comparison", "normalise purchase prices across sites".
+
+Invoke this workflow from chat when a user asks for one of these comparisons or describes the business question above. Collect and verify the required plant exports, scope, rules, and human decisions; do not treat invoking the workflow as approval of any decision gate.
 
 Do **not** use it to claim achieved savings, to compare across specifications nobody has approved as equivalent, or for categories other than the one the rules pack describes.
 
@@ -36,11 +39,9 @@ Do **not** use it to claim achieved savings, to compare across specifications no
 
 Templates and a worked example are in `examples/synthetic/`.
 
-## Process Studio entry point
+## Deterministic entry point
 
-`generate_cross_site_purchase_comparison.py`, `generate.py`, `run.py`, and the `ppc/` package are all at the skill root. Keeping local imports alongside the discoverable entry point makes them part of the skill source rather than separately detected Python packages. Both generate entry points delegate to the same tested pipeline as the local CLI. The existing `generate_cross_site_purchase_comparison.py` callable accepts `scope_path`, `rules_dir`, optional `decisions_path`, and optional `out_dir` (default `out`), and returns a JSON summary. The additional conventional `generate.py` exposes `generate(inputs=None, **kwargs)` as a best-effort compatibility adapter: it accepts common JSON/dict/list path payloads and looks for conventional scope, decisions, and complete rules inputs under the current working directory. It deliberately rejects ambiguous discoveries and paths outside that directory. This shape is a compatibility guess, not a confirmed Process Studio contract; confirm the platform callable and return conventions with its owner. Neither entry point bypasses runner validation or the existing approval gates.
-
-The runner uses `openpyxl` to create the validated `.xlsx` output; the adapter does not substitute text/CSV output if that dependency is unavailable. See `../tests/test_generate_adapter.py` for the guessed callable shapes it currently covers.
+The workflow's deterministic entry script is `scripts/generate_cross_site_purchase_comparison.py`, following the skill's `scripts/generate_*.*` convention. It uses the same validated local runner and `ppc/` code as the CLI. Local modules remain bundled at the skill root and the script adds that root to its import path when invoked from `scripts/`. This entry point does not establish an undocumented Process Studio callable or input/output contract. Neither it nor the CLI bypasses path validation or the existing human approval gates.
 
 ## How to run locally
 
@@ -95,4 +96,4 @@ Change only: the plant exports, `scope.json`, the rules pack (headers, specifica
 - Variance analysis itself isn't new (procurement suites offer it). What's new here is the comparability method for inconsistent exports and the guarantees above. **A search of existing Process Studio skills and public assets has not been done yet.**
 
 ## Files
-`generate_cross_site_purchase_comparison.py` (existing Process Studio `generate_*` entry point) · `generate.py` (best-effort conventional adapter; unconfirmed platform contract) · `run.py` (local CLI and workflow runner) · `ppc/` (loader, matching, compare, release, workbook, rules) · `tests/` (pipeline and adapter tests) · `examples/synthetic/` (synthetic plant files, rules pack, 3 decision stages, hand-calculated expected results, `TRAPS.md`).
+`SKILL.md` (chat-invoked workflow instructions) · `scripts/generate_cross_site_purchase_comparison.py` (deterministic entry point) · `run.py` (local CLI and workflow runner) · `ppc/` (loader, matching, compare, release, workbook, rules) · `tests/` (pipeline and entry-point tests) · `examples/synthetic/` (synthetic plant files, rules pack, 3 decision stages, hand-calculated expected results, `TRAPS.md`).

@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
-"""Process Studio auto-executable entry point for cross-site-purchase-comparison.
+"""Deterministic generate entry point for the cross-site-purchase-comparison workflow.
 
-The callable `generate_cross_site_purchase_comparison` is kept at the skill root so
-Process Studio can discover a generate_* entry point. The runner and ppc package
-are also at the skill root so local modules resolve as part of the skill bundle.
-
-Callable arguments are file paths relative to the Process Studio execution working
-folder (or the scope file's folder):
-  scope_path: required JSON scope file
-  rules_dir: required rules-pack directory
-  decisions_path: optional human decisions JSON
-  out_dir: output directory, defaults to `out`
-
-The CLI form remains available for local use. Process Studio's exact callable
-argument/return contract should be confirmed with the platform owner.
+This script is in the skill's optional scripts/ folder and follows the documented
+scripts/generate_*.* discovery convention. The bundled runner and ppc package remain
+at the skill root; add that directory to the import path when this file is executed
+by itself. Process Studio's exact script input and output contract is not assumed.
 """
 from __future__ import annotations
 
@@ -23,8 +14,9 @@ import sys
 from typing import Any
 
 HERE = os.path.dirname(os.path.realpath(__file__))
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
+SKILL_DIR = os.path.dirname(HERE)
+if SKILL_DIR not in sys.path:
+    sys.path.insert(0, SKILL_DIR)
 
 import run as runner  # noqa: E402
 from ppc.rules import RulesError  # noqa: E402

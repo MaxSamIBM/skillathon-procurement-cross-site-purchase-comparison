@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backward-compatible local CLI wrapper for the skill-root runner."""
+"""Local CLI wrapper for the skill-root runner."""
 from __future__ import annotations
 
 import importlib.util
@@ -16,7 +16,7 @@ if _spec is None or _spec.loader is None:
 _runner = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_runner)
 
-# Preserve imports used by older local scripts and tests.
+# Keep the runner's public names available to local scripts and tests.
 for _name in dir(_runner):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_runner, _name)
