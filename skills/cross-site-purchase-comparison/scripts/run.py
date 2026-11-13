@@ -44,6 +44,19 @@ def safe_input_path(base: str, rel: str) -> str:
     return cand
 
 
+def confine(path: str, roots: list, what: str) -> str:
+    """Resolve a command-line path and require it to sit inside one of the allowed root folders
+    (the working folder, or the folder holding scope.json). Rejects '..' escapes and symlinks that leave."""
+    if not isinstance(path, str) or "\x00" in path:
+        raise RulesError(f"Invalid {what} path")
+    real = os.path.realpath(path)
+    for root in roots:
+        root_real = os.path.realpath(root)
+        if os.path.commonpath([root_real, real]) == root_real:
+            return real
+    raise RulesError(f"{what} path '{path}' is outside the working folder and the scope file's folder")
+
+
 def _json_default(o):
     if isinstance(o, Decimal):
         return float(o)
@@ -198,6 +211,12 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
     try:
+        scope_real = os.path.realpath(a.scope)
+        roots = [os.getcwd(), os.path.dirname(scope_real)]
+        a.scope = confine(a.scope, roots, "Scope file")
+        a.rules = confine(a.rules, roots, "Rules folder")
+        a.decisions = confine(a.decisions, roots, "Decisions file") if a.decisions else ""
+        a.out = confine(a.out, roots, "Output folder")
         rep = run(a.scope, a.rules, a.decisions, a.out)
     except RulesError as e:
         print(f"ERROR: {e}", file=sys.stderr)
