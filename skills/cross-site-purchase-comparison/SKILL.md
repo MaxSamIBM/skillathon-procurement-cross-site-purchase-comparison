@@ -1,6 +1,5 @@
 ---
 name: cross-site-purchase-comparison
-version: 0.1.0
 description: >
   Compare what different plants pay for the same packaging item, from inconsistent Excel purchase
   exports. Decides which purchases can fairly be compared, converts them to a common price basis, and
