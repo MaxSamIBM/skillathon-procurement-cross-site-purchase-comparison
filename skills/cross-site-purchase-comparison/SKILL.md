@@ -38,21 +38,21 @@ Templates and a worked example are in `examples/synthetic/`.
 
 ## Process Studio entry point
 
-`generate_cross_site_purchase_comparison.py` is at the skill root as the auto-executable `generate_*` entry point. It delegates to the same tested pipeline as the local CLI. The callable accepts `scope_path`, `rules_dir`, optional `decisions_path`, and optional `out_dir` (default `out`), and returns a JSON summary. Provide file paths inside the project working folder; the script applies the same path-confinement checks as the CLI. If the Process Studio runner supplies a different input contract, adapt this thin entry point only; do not bypass validation.
+`generate_cross_site_purchase_comparison.py`, `run.py`, and the `ppc/` package are all at the skill root. Keeping local imports alongside the discoverable entry point makes them part of the skill source rather than separately detected Python packages. The entry point delegates to the same tested pipeline as the local CLI. The callable accepts `scope_path`, `rules_dir`, optional `decisions_path`, and optional `out_dir` (default `out`), and returns a JSON summary. Provide file paths inside the project working folder; the script applies the same path-confinement checks as the CLI. If the Process Studio runner supplies a different input contract, adapt this thin entry point only; do not bypass validation.
 
 ## How to run locally
 
 **Demo (bundled synthetic data, nothing to upload).** Run the three gate stages in order. Show the exact command and full output of each:
 ```
-python3 scripts/run.py --example 0csv --out out/    # stops at Gate 1 (exit 2)
-python3 scripts/run.py --example 1csv --out out/    # Gate 1 confirmed -> DRAFT workbook
-python3 scripts/run.py --example 2csv --out out/    # all gates closed -> FINAL workbook
+python3 run.py --example 0csv --out out/    # stops at Gate 1 (exit 2)
+python3 run.py --example 1csv --out out/    # Gate 1 confirmed -> DRAFT workbook
+python3 run.py --example 2csv --out out/    # all gates closed -> FINAL workbook
 ```
 (`--example 0`, `1`, `2` do the same with the `.xlsx` copies. Use the `csv` form if the platform cannot give scripts real binary workbooks.)
 
 **Real run (uploaded files).**
 ```
-python3 scripts/run.py --scope scope.json --rules rules/ --decisions decisions.json --out out/
+python3 run.py --scope scope.json --rules rules/ --decisions decisions.json --out out/
 ```
 All input paths must sit in the working folder or the folder holding `scope.json`; `--out` must be a folder inside them.
 Needs Python 3.10+ and `openpyxl`. Exit codes: `0` workbook written | `1` input or rules error | `2` stopped at Gate 1 | `3` reconciliation failed | `4` release checks failed (no workbook).
@@ -93,4 +93,4 @@ Change only: the plant exports, `scope.json`, the rules pack (headers, specifica
 - Variance analysis itself isn't new (procurement suites offer it). What's new here is the comparability method for inconsistent exports and the guarantees above. **A search of existing Process Studio skills and public assets has not been done yet.**
 
 ## Files
-`generate_cross_site_purchase_comparison.py` (Process Studio `generate_*` entry point) · `scripts/run.py` (local CLI) · `scripts/ppc/` (loader, matching, compare, release, workbook, rules) · `tests/` (29 tests) · `examples/synthetic/` (synthetic plant files, rules pack, 3 decision stages, hand-calculated expected results, `TRAPS.md`).
+`generate_cross_site_purchase_comparison.py` (Process Studio `generate_*` entry point) · `run.py` (local CLI and workflow runner) · `ppc/` (loader, matching, compare, release, workbook, rules) · `tests/` (29 tests) · `examples/synthetic/` (synthetic plant files, rules pack, 3 decision stages, hand-calculated expected results, `TRAPS.md`).

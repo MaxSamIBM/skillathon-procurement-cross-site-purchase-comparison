@@ -2,8 +2,8 @@
 """Process Studio auto-executable entry point for cross-site-purchase-comparison.
 
 The callable `generate_cross_site_purchase_comparison` is kept at the skill root so
-Process Studio can discover a generate_* entry point. It delegates all parsing,
-validation, reconciliation, comparison, and output generation to scripts/run.py.
+Process Studio can discover a generate_* entry point. The runner and ppc package
+are also at the skill root so local modules resolve as part of the skill bundle.
 
 Callable arguments are file paths relative to the Process Studio execution working
 folder (or the scope file's folder):
@@ -23,9 +23,8 @@ import sys
 from typing import Any
 
 HERE = os.path.dirname(os.path.realpath(__file__))
-SCRIPTS = os.path.join(HERE, "scripts")
-if SCRIPTS not in sys.path:
-    sys.path.insert(0, SCRIPTS)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
 
 import run as runner  # noqa: E402
 from ppc.rules import RulesError  # noqa: E402

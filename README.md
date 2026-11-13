@@ -9,9 +9,9 @@ Read [`skills/cross-site-purchase-comparison/SKILL.md`](skills/cross-site-purcha
 ```
 skills/cross-site-purchase-comparison/
   SKILL.md      skill definition
-  scripts/      run.py (CLI) and the ppc package
+  generate_cross_site_purchase_comparison.py, run.py, ppc/   self-contained workflow entry point and local modules
   examples/     synthetic plant files, rules pack, decision stages, expected results
-  tests/        23 tests
+  tests/        29 tests
 ```
 
 ## Try it in a minute (synthetic data, no client data)
@@ -21,10 +21,10 @@ pip install openpyxl
 cd skills/cross-site-purchase-comparison
 python3 examples/synthetic/generate_examples.py        # creates the four messy plant files
 E=examples/synthetic
-python3 scripts/run.py --scope $E/scope.json --rules $E/rules --decisions $E/decisions_0_start.json         --out out0   # stops at Gate 1
-python3 scripts/run.py --scope $E/scope.json --rules $E/rules --decisions $E/decisions_1_scope_confirmed.json --out out1   # DRAFT
-python3 scripts/run.py --scope $E/scope.json --rules $E/rules --decisions $E/decisions_2_signed_off.json     --out out2   # FINAL
-python3 -m unittest discover -s tests                  # 23 tests
+python3 run.py --scope $E/scope.json --rules $E/rules --decisions $E/decisions_0_start.json         --out out0   # stops at Gate 1
+python3 run.py --scope $E/scope.json --rules $E/rules --decisions $E/decisions_1_scope_confirmed.json --out out1   # DRAFT
+python3 run.py --scope $E/scope.json --rules $E/rules --decisions $E/decisions_2_signed_off.json     --out out2   # FINAL
+python3 -m unittest discover -s tests                  # 29 tests
 ```
 
 ## What the demo shows
@@ -38,7 +38,7 @@ python3 -m unittest discover -s tests                  # 23 tests
 Planted traps (full list in `examples/synthetic/TRAPS.md`): different headers per plant, roll price vs per-label price, specification Y kept out, a roll with no pack size, EUR prices, an abbreviated description, an out-of-window order, a blank quantity, a small spot order and an ex-works price that must not set the benchmark.
 
 ## Status and honesty notes
-- **Tested on synthetic data only.** 23 tests pass. Two rules were deliberately broken (a wrong pack size, a false specification equivalence) and the tests failed as they should.
+- **Tested on synthetic data only.** 29 tests pass. Two rules were deliberately broken (a wrong pack size, a false specification equivalence) and the tests failed as they should.
 - **Not yet checked:** that Process Studio can run this script, read uploaded `.xlsx` files and write a workbook; whether similar skills already exist in Process Studio; whether the name is free; whether the client agreement allows reusing the method.
 - **Savings figures are illustrative scenarios**, not results. The EUR rate is made up. No real client numbers appear anywhere.
 - No pilot has been run, so there are no measured time savings or accuracy figures. A pilot should measure analyst preparation time, buyer-validated findings, and false matches.
