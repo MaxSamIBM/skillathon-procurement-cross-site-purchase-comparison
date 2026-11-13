@@ -1,0 +1,7 @@
+{
+  "_doc": "SYNTHETIC. Gate 1 done: scope confirmed and Plant D's two unknown headers mapped by a person. Gate 2 (uncertain matches) and Gate 3 (sign-off) still open, so the run produces a DRAFT.",
+  "gate1": { "confirmed": true, "by": "Procurement consultant (role)" },
+  "column_overrides": {
+    "Plant D": { "Order Qty (M)": "quantity", "Price per M": "unit_price" }
+  }
+}
