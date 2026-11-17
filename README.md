@@ -10,7 +10,7 @@ Read [`skills/cross-site-purchase-comparison/SKILL.md`](skills/cross-site-purcha
 skills/cross-site-purchase-comparison/
   SKILL.md
   scripts/generate_cross_site_purchase_comparison.py  # self-contained stdlib entry point
-  examples/synthetic/                                 # synthetic CSVs, rules, decisions
+  examples/synthetic/                                 # synthetic CSVs, rules (folder + rules.json), decisions
 dev/skill-tests/   # tests for the skill (outside skills/ so the scanner skips them)
 dev/excel-engine/  # legacy .xlsx engine, local development only
 ```
@@ -29,7 +29,7 @@ For local testing (not a claim about Process Studio's undocumented staging contr
 working-dir/
   scope.json
   decisions.json        # optional until a human decision is recorded
-  rules/                # complete rules pack
+  rules.json            # complete rules pack in one file (or a rules/ folder)
   inputs_csv/           # CSVs at paths referenced in scope.json
 ```
 

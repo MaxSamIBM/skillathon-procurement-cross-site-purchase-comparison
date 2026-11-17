@@ -1,0 +1,217 @@
+{
+  "_doc": "Single-file rules pack: the eight rules/ files combined. Attach this instead of the rules/ folder.",
+  "columns": {
+    "_doc": "Maps each plant's column headers to the standard fields. Headers are compared after lower-casing and replacing punctuation with spaces. Exact match only. Anything not listed must be mapped by a person in decisions.json > column_overrides at Gate 1. Header aliases do not define purchase-unit meaning; unit conversions are determined only by unit_conversions.csv.",
+    "required": [
+      "date",
+      "description",
+      "quantity",
+      "purchase_unit",
+      "unit_price",
+      "currency"
+    ],
+    "optional": [
+      "item_code",
+      "supplier",
+      "freight_terms",
+      "line_amount"
+    ],
+    "aliases": {
+      "date": [
+        "po date",
+        "date",
+        "posting date",
+        "order date",
+        "doc date"
+      ],
+      "item_code": [
+        "material",
+        "item no",
+        "mat code",
+        "item code",
+        "material number",
+        "mat no"
+      ],
+      "description": [
+        "material description",
+        "item text",
+        "mat desc",
+        "description",
+        "short text",
+        "item description"
+      ],
+      "quantity": [
+        "order qty",
+        "order qty m",
+        "quantity",
+        "qty",
+        "po quantity"
+      ],
+      "purchase_unit": [
+        "uom",
+        "unit",
+        "oun",
+        "order unit",
+        "purchase unit"
+      ],
+      "unit_price": [
+        "net price",
+        "unit price",
+        "price",
+        "price per m"
+      ],
+      "currency": [
+        "curr",
+        "currency",
+        "crcy",
+        "cur"
+      ],
+      "supplier": [
+        "vendor",
+        "supplier name",
+        "supplier",
+        "vendor name"
+      ],
+      "freight_terms": [
+        "incoterm",
+        "delivery terms",
+        "inco terms",
+        "incoterms",
+        "incot"
+      ],
+      "line_amount": [
+        "net value",
+        "line total",
+        "value",
+        "amount"
+      ]
+    }
+  },
+  "settings": {
+    "_doc": "Comparison conditions. Purchases are compared only inside the same cell of (specification, order-size band, freight class). Bands use labels per order line.",
+    "price_basis_labels": 1000,
+    "matching": {
+      "propose_threshold": 0.6
+    },
+    "volume_bands": [
+      {
+        "name": "small",
+        "below_labels_per_order": 100000
+      },
+      {
+        "name": "standard",
+        "below_labels_per_order": null
+      }
+    ],
+    "freight_groups": {
+      "DAP": "delivered",
+      "DDP": "delivered",
+      "CPT": "delivered",
+      "CIP": "delivered",
+      "EXW": "ex-works",
+      "FCA": "ex-works",
+      "FOB": "ex-works"
+    },
+    "min_plants_per_group": 2,
+    "amount_tolerance": 0.01
+  },
+  "specs": [
+    {
+      "spec_id": "SPEC-X",
+      "spec_name": "White label, specification X"
+    },
+    {
+      "spec_id": "SPEC-Y",
+      "spec_name": "Label, specification Y"
+    }
+  ],
+  "item_map": [
+    {
+      "plant": "Plant A",
+      "item_code": "A-1001",
+      "description": "Product label, white, specification X",
+      "spec_id": "SPEC-X",
+      "status": "approved",
+      "approved_by": "Category buyer (role)"
+    },
+    {
+      "plant": "Plant B",
+      "item_code": "880021",
+      "description": "White label, specification X",
+      "spec_id": "SPEC-X",
+      "status": "approved",
+      "approved_by": "Category buyer (role)"
+    },
+    {
+      "plant": "Plant C",
+      "item_code": "C-77",
+      "description": "Label, specification Y",
+      "spec_id": "SPEC-Y",
+      "status": "approved",
+      "approved_by": "Category buyer (role)"
+    }
+  ],
+  "spec_equivalences": [],
+  "abbreviations": [
+    {
+      "short": "lbl",
+      "long": "label"
+    },
+    {
+      "short": "wht",
+      "long": "white"
+    },
+    {
+      "short": "spec",
+      "long": "specification"
+    },
+    {
+      "short": "blk",
+      "long": "black"
+    },
+    {
+      "short": "clr",
+      "long": "clear"
+    }
+  ],
+  "unit_conversions": [
+    {
+      "rule_id": "UC-001",
+      "unit_alias": "ROLL-500",
+      "plant": "*",
+      "labels_per_unit": "500",
+      "note": "Roll of 500 labels"
+    },
+    {
+      "rule_id": "UC-002",
+      "unit_alias": "ROLL-1000",
+      "plant": "*",
+      "labels_per_unit": "1000",
+      "note": "Roll of 1000 labels"
+    },
+    {
+      "rule_id": "UC-003",
+      "unit_alias": "RL (500)",
+      "plant": "Plant C",
+      "labels_per_unit": "500",
+      "note": "Plant C writes the roll size in brackets"
+    },
+    {
+      "rule_id": "UC-004",
+      "unit_alias": "M",
+      "plant": "*",
+      "labels_per_unit": "1000",
+      "note": "M = one thousand labels; quantity and price are both per thousand"
+    }
+  ],
+  "fx_rates": [
+    {
+      "rule_id": "FX-001",
+      "currency": "EUR",
+      "rate_to_reporting": "1.08",
+      "reporting_currency": "USD",
+      "as_of": "2026-10-31",
+      "source_note": "Illustrative synthetic rate - replace with the client's approved rate"
+    }
+  ]
+}

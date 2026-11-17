@@ -2,7 +2,7 @@
 """CSV-first deterministic workflow entry point (Python standard library only).
 
 Staged-file convention: run with the staged package as cwd, containing scope.json,
- rules/, decisions.json, and CSVs referenced relative to scope.json. Outputs go to
+ rules.json (or rules/), decisions.json, and the plant CSVs in inputs_csv/. Outputs go to
  cwd/out/. This convention is documented for users; it is not a claim about an
  undocumented Process Studio argument or return contract.
 """
@@ -21,6 +21,13 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 VERSION = "0.2.1"
 RULE_FILES = ("columns.json", "settings.json", "specs.csv", "item_map.csv",
               "spec_equivalences.csv", "abbreviations.csv", "unit_conversions.csv", "fx_rates.csv")
+RULES_FILE = "rules.json"
+RULE_TABLES = {"specs": ("spec_id", "spec_name"),
+               "item_map": ("plant", "item_code", "description", "spec_id", "status"),
+               "spec_equivalences": ("spec_a", "spec_b", "status"),
+               "abbreviations": ("short", "long"),
+               "unit_conversions": ("rule_id", "unit_alias", "plant", "labels_per_unit"),
+               "fx_rates": ("rule_id", "currency", "rate_to_reporting", "reporting_currency")}
 TOTAL_RE = re.compile(r"\b(grand\s*total|sub\s*-?\s*total|total)\b", re.I)
 
 
@@ -102,15 +109,47 @@ def _read_csv(path, required=()):
                 for row in rd if any((v or "").strip() for v in row.values())]
 
 
-def _load_rules():
+def _table_rows(rows, name, required):
+    """Rows of one rules table given as a JSON list of objects; same cleaning as _read_csv."""
+    if not isinstance(rows, list):
+        raise WorkflowError(f"rules.json: '{name}' must be a list of rows")
+    out = []
+    for i, row in enumerate(rows, 1):
+        if not isinstance(row, dict):
+            raise WorkflowError(f"rules.json: '{name}' row {i} must be an object")
+        missing = [c for c in required if c not in row]
+        if missing:
+            raise WorkflowError(f"rules.json: '{name}' row {i} missing field(s): {missing}")
+        clean = {str(k): ("" if v is None else str(v)).strip() for k, v in row.items()}
+        if any(clean.values()):
+            out.append(clean)
+    return out
+
+
+def _rules_source():
+    """Rules come from one rules.json (preferred) or the eight files in rules/."""
+    if _regular(RULES_FILE):
+        pack = _json(RULES_FILE, RULES_FILE)
+        if not isinstance(pack, dict):
+            raise WorkflowError("rules.json must be a JSON object")
+        missing = [k for k in ("columns", "settings", *RULE_TABLES) if k not in pack]
+        if missing:
+            raise WorkflowError(f"rules.json missing section(s): {missing}")
+        tables = {k: _table_rows(pack[k], k, req) for k, req in RULE_TABLES.items()}
+        return pack["columns"], pack["settings"], tables, {RULES_FILE: _hash(RULES_FILE)}
     if not os.path.isdir(RULES_DIR) or os.path.islink(RULES_DIR):
-        raise WorkflowError(f"Rules folder not found: {RULES_DIR}/")
+        raise WorkflowError(f"Rules not found: attach {RULES_FILE} (or a {RULES_DIR}/ folder)")
     paths = {n: os.path.join(RULES_DIR, n) for n in RULE_FILES}
     for n, rule_path in paths.items():
         if not _regular(rule_path):
             raise WorkflowError(f"Required rules file not found: {RULES_DIR}/{n}")
-    fingerprints = {n: _hash(p) for n, p in paths.items()}
-    columns = _json(paths["columns.json"], "columns.json")
+    tables = {k: _read_csv(paths[k + ".csv"], req) for k, req in RULE_TABLES.items()}
+    return (_json(paths["columns.json"], "columns.json"), _json(paths["settings.json"], "settings.json"),
+            tables, {n: _hash(p) for n, p in paths.items()})
+
+
+def _load_rules():
+    columns, settings, tables, fingerprints = _rules_source()
     required = columns["required"]
     fields = required + columns.get("optional", [])
     aliases = {}
@@ -122,7 +161,6 @@ def _load_rules():
             if key in aliases and aliases[key] != field:
                 raise WorkflowError(f"columns.json: alias '{name}' maps to two fields")
             aliases[key] = field
-    settings = _json(paths["settings.json"], "settings.json")
     bands = settings["volume_bands"]
     if not bands or bands[-1].get("below_labels_per_order") is not None:
         raise WorkflowError("settings.json: last volume band must have below_labels_per_order = null")
@@ -134,9 +172,9 @@ def _load_rules():
              "tolerance": _decimal(settings.get("amount_tolerance", "0.01"), "amount tolerance"),
              "specs": {}, "item_map": [], "code_map": {}, "desc_map": {}, "parent": {},
              "abbr": {}, "units": {}, "fx": {}, "fingerprints": fingerprints}
-    for row in _read_csv(paths["specs.csv"], ("spec_id", "spec_name")):
+    for row in tables["specs"]:
         rules["specs"][row["spec_id"]] = row["spec_name"]
-    for row in _read_csv(paths["item_map.csv"], ("plant", "item_code", "description", "spec_id", "status")):
+    for row in tables["item_map"]:
         if row["spec_id"] not in rules["specs"]:
             raise WorkflowError(f"item_map.csv: unknown spec_id '{row['spec_id']}'")
         rules["item_map"].append(row)
@@ -154,16 +192,16 @@ def _load_rules():
             spec = rules["parent"][spec]
         return spec
 
-    for row in _read_csv(paths["spec_equivalences.csv"], ("spec_a", "spec_b", "status")):
+    for row in tables["spec_equivalences"]:
         for key in ("spec_a", "spec_b"):
             if row[key] not in rules["specs"]:
                 raise WorkflowError(f"spec_equivalences.csv: unknown spec '{row[key]}'")
         if row["status"].lower() == "approved":
             a, b = root(row["spec_a"]), root(row["spec_b"])
             rules["parent"][max(a, b)] = min(a, b)
-    for row in _read_csv(paths["abbreviations.csv"], ("short", "long")):
+    for row in tables["abbreviations"]:
         rules["abbr"][_norm(row["short"])] = _norm(row["long"])
-    for row in _read_csv(paths["unit_conversions.csv"], ("rule_id", "unit_alias", "plant", "labels_per_unit")):
+    for row in tables["unit_conversions"]:
         amount = _decimal(row["labels_per_unit"], f"unit_conversions {row['rule_id']}")
         if amount <= 0:
             raise WorkflowError(f"unit_conversions {row['rule_id']}: labels_per_unit must be > 0")
@@ -171,7 +209,7 @@ def _load_rules():
         if key in rules["units"]:
             raise WorkflowError(f"unit_conversions: duplicate rule for {key}")
         rules["units"][key] = {"rule_id": row["rule_id"], "labels_per_unit": amount}
-    for row in _read_csv(paths["fx_rates.csv"], ("rule_id", "currency", "rate_to_reporting", "reporting_currency")):
+    for row in tables["fx_rates"]:
         rate = _decimal(row["rate_to_reporting"], f"fx_rates {row['rule_id']}")
         if rate <= 0:
             raise WorkflowError(f"fx_rates {row['rule_id']}: rate must be > 0")

@@ -27,6 +27,14 @@ ENTRY = os.path.join(ROOT, "scripts", "generate_cross_site_purchase_comparison.p
 EX = os.path.join(ROOT, "examples", "synthetic")
 
 
+def _load():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("csv_generate_rules_test", ENTRY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class TestCsvGenerate(unittest.TestCase):
     def staged(self, tmp, decisions="decisions_2_signed_off.json"):
         shutil.copy(os.path.join(EX, "scope_csv.json"), os.path.join(tmp, "scope.json"))
@@ -108,6 +116,40 @@ class TestCsvGenerate(unittest.TestCase):
         self.assertEqual(result["status"], "ERROR")
         self.assertIn("not found in inputs_csv", result["error"].lower())
 
+
+    def test_single_rules_json_gives_same_results_as_rules_folder(self):
+        import csv as _csv
+        results = {}
+        for mode in ("folder", "json"):
+            with tempfile.TemporaryDirectory() as tmp:
+                os.makedirs(os.path.join(tmp, "inputs_csv"))
+                shutil.copy(os.path.join(EX, "scope_csv.json"), tmp)
+                shutil.copy(os.path.join(EX, "decisions_2_signed_off.json"), tmp)
+                for name in os.listdir(os.path.join(EX, "inputs_csv")):
+                    shutil.copy(os.path.join(EX, "inputs_csv", name), os.path.join(tmp, "inputs_csv"))
+                if mode == "folder":
+                    shutil.copytree(os.path.join(EX, "rules"), os.path.join(tmp, "rules"))
+                else:
+                    shutil.copy(os.path.join(EX, "rules.json"), tmp)
+                with _in_dir(tmp):
+                    report = _load().generate()
+                self.assertEqual(report["status"], "FINAL")
+                with open(os.path.join(tmp, "out", "opportunities.csv"), encoding="utf-8") as f:
+                    results[mode] = list(_csv.reader(f))
+        self.assertEqual(results["folder"], results["json"])
+
+    def test_rules_json_missing_section_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "inputs_csv"))
+            shutil.copy(os.path.join(EX, "scope_csv.json"), tmp)
+            for name in os.listdir(os.path.join(EX, "inputs_csv")):
+                shutil.copy(os.path.join(EX, "inputs_csv", name), os.path.join(tmp, "inputs_csv"))
+            with open(os.path.join(tmp, "rules.json"), "w", encoding="utf-8") as f:
+                f.write('{"settings": {}}')
+            with _in_dir(tmp):
+                report = _load().generate()
+            self.assertNotIn(report.get("status"), ("STOPPED_AT_GATE_1", "DRAFT", "FINAL"))
+            self.assertIn("missing section", json.dumps(report))
 
 if __name__ == "__main__":
     unittest.main()
