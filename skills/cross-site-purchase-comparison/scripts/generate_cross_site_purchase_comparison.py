@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """CSV-first deterministic workflow entry point (Python standard library only).
 
-Staged-file convention: run with the staged package as cwd, containing scope.json,
- rules/, decisions.json, and CSVs referenced relative to scope.json. Outputs go to
- cwd/out/. This convention is documented for users; it is not a claim about an
+Staged-file convention: run with the staged package as cwd. Files may sit flat in cwd with
+ their original names (scope_csv.json, decisions_*.json, rules files, plant CSVs) or in the
+ folders rules/ and inputs_csv/. Outputs go to cwd/out/. This convention is documented for users; it is not a claim about an
  undocumented Process Studio argument or return contract.
 """
 from __future__ import annotations
@@ -28,11 +28,38 @@ class WorkflowError(ValueError):
     pass
 
 
-SCOPE_FILE = "scope.json"
-DECISIONS_FILE = "decisions.json"
+SCOPE_NAMES = ("scope.json", "scope_csv.json")
+DECISIONS_NAME = "decisions.json"
 RULES_DIR = "rules"
 INPUT_DIR = "inputs_csv"
 OUT_DIR = "out"
+HERE = os.curdir
+
+
+def _folder(preferred):
+    """Use the named folder if it exists, otherwise the working folder itself (flat uploads)."""
+    return preferred if os.path.isdir(preferred) and not os.path.islink(preferred) else HERE
+
+
+def _find_scope():
+    for name in SCOPE_NAMES:
+        if _regular(name):
+            return name
+    raise WorkflowError("Required file not found: scope.json (or scope_csv.json)")
+
+
+def _find_decisions():
+    """decisions.json, or exactly one decisions*.json in the working folder; none means no decisions yet."""
+    if _regular(DECISIONS_NAME):
+        return DECISIONS_NAME
+    found = []
+    with os.scandir(HERE) as listing:
+        for entry in listing:
+            if entry.is_file(follow_symlinks=False) and entry.name.startswith("decisions") and entry.name.endswith(".json"):
+                found.append(entry.name)
+    if len(found) > 1:
+        raise WorkflowError(f"More than one decisions file found {sorted(found)}; attach only the one for this stage")
+    return found[0] if found else None
 
 
 def _regular(path):
@@ -82,12 +109,11 @@ def _read_csv(path, required=()):
 
 
 def _load_rules():
-    if not os.path.isdir(RULES_DIR) or os.path.islink(RULES_DIR):
-        raise WorkflowError(f"Rules folder not found: {RULES_DIR}/")
-    paths = {n: os.path.join(RULES_DIR, n) for n in RULE_FILES}
+    rules_folder = _folder(RULES_DIR)
+    paths = {n: os.path.join(rules_folder, n) for n in RULE_FILES}
     for n, rule_path in paths.items():
         if not _regular(rule_path):
-            raise WorkflowError(f"Required rules file not found: {RULES_DIR}/{n}")
+            raise WorkflowError(f"Required rules file not found: {n} (looked in {RULES_DIR}/ and the working folder)")
     fingerprints = {n: _hash(p) for n, p in paths.items()}
     columns = _json(paths["columns.json"], "columns.json")
     required = columns["required"]
@@ -535,15 +561,12 @@ def _produce(out_dir, report, lines, opportunities, queue, g1):
 
 
 def _run():
-    if not _regular(SCOPE_FILE):
-        raise WorkflowError(f"Required file not found: {SCOPE_FILE}")
-    if os.path.lexists(DECISIONS_FILE) and not _regular(DECISIONS_FILE):
-        raise WorkflowError(f"{DECISIONS_FILE} must be a regular file")
-    if not os.path.isdir(INPUT_DIR) or os.path.islink(INPUT_DIR):
-        raise WorkflowError(f"Required folder not found: {INPUT_DIR}/")
+    scope_name = _find_scope()
+    decisions_name = _find_decisions()
+    input_folder = _folder(INPUT_DIR)
     os.makedirs(OUT_DIR, exist_ok=True)
-    scope = _json(SCOPE_FILE, "scope.json")
-    decisions = _json(DECISIONS_FILE, "decisions.json") if _regular(DECISIONS_FILE) else {}
+    scope = _json(scope_name, "scope")
+    decisions = _json(decisions_name, "decisions") if decisions_name else {}
     for key in ("reporting_currency", "window", "files"):
         if key not in scope: raise WorkflowError(f"scope is missing '{key}'")
     if len(scope["files"]) < 2: raise WorkflowError("At least two plant CSV files are needed")
@@ -552,12 +575,12 @@ def _run():
     for item in scope["files"]:
         name = item.get("file")
         if not isinstance(name, str) or not name.lower().endswith(".csv"):
-            raise WorkflowError(f"Scope entry for {item.get('plant')!r} must give 'file' as a .csv file name in {INPUT_DIR}/")
+            raise WorkflowError(f"Scope entry for {item.get('plant')!r} must give 'file' as a .csv file name")
     rules = _load_rules()
     # Scope names are only ever compared with the folder listing; the files that get opened
     # are the listing's own entries, so scope text never becomes part of a path.
     matched = []
-    with os.scandir(INPUT_DIR) as listing:
+    with os.scandir(input_folder) as listing:
         for entry in sorted(listing, key=lambda e: e.name):
             if entry.is_file(follow_symlinks=False):
                 for position, item in enumerate(scope["files"]):
@@ -567,7 +590,7 @@ def _run():
     if len(matched) != len(scope["files"]):
         found = {m[1]["file"] for m in matched}
         absent = [i["file"] for i in scope["files"] if i["file"] not in found]
-        raise WorkflowError(f"CSV file(s) named in scope not found in {INPUT_DIR}/: {absent}")
+        raise WorkflowError(f"CSV file(s) named in scope not found in {INPUT_DIR}/ or the working folder: {absent}")
     overrides = decisions.get("column_overrides", {})
     files, resolved = [], []
     for _, item, path in matched:
