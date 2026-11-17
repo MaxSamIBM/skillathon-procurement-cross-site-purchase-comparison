@@ -18,7 +18,7 @@ import sys
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 RULE_FILES = ("columns.json", "settings.json", "specs.csv", "item_map.csv",
               "spec_equivalences.csv", "abbreviations.csv", "unit_conversions.csv", "fx_rates.csv")
 RULES_FILE = "rules.json"

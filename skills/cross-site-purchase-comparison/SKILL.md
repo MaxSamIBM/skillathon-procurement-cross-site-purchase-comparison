@@ -8,14 +8,11 @@ description: >
 type: workflow
 allowed-tools:
   - run_skill_script
-  - Read
-  - Write
-  - Grep
 metadata:
-  version: 0.2.1
+  version: 0.2.2
 ---
 
-# cross-site-purchase-comparison (v0.2.1)
+# cross-site-purchase-comparison (v0.2.2)
 
 **Business question:** *Are different parts of the client paying different prices for the same thing, and which differences are worth investigating?*
 
@@ -84,7 +81,7 @@ For local testing only, stage these items in a working directory: `scope.json`, 
 ## Ready for another client
 Change only: the plant exports, `scope.json`, the rules pack (headers, specifications and item map, unit conversions, FX, bands) and `decisions.json`. No code changes. Replace the synthetic rules with the client's; never put client data in this folder.
 
-## Limits of v0.2.1 (be honest with the client)
+## Limits of v0.2.2 (be honest with the client)
 - One category (packaging labels), one price basis (per 1,000 labels), CSV input only. Excel files must be exported to CSV first.
 - Savings are scenarios. They don't confirm that a price is available at another plant's volume, location or terms. A buyer must confirm.
 - Column mapping uses exact aliases plus a person; there is no fuzzy header guessing.
