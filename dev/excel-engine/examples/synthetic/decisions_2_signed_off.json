@@ -1,0 +1,18 @@
+{
+  "_doc": "SYNTHETIC. Gates 1-3 done. The category buyer approved Plant D's abbreviated description as specification X. The procurement lead signed off.",
+  "gate1": { "confirmed": true, "by": "Procurement consultant (role)" },
+  "column_overrides": {
+    "Plant D": { "Order Qty (M)": "quantity", "Price per M": "unit_price" }
+  },
+  "match_decisions": [
+    {
+      "plant": "Plant D",
+      "description": "Lbl wht spec X",
+      "decision": "approve",
+      "spec_id": "SPEC-X",
+      "by": "Category buyer (role)",
+      "reason": "Confirmed with the plant buyer: same white label, specification X"
+    }
+  ],
+  "gate3": { "approved": true, "by": "Procurement lead (role)" }
+}

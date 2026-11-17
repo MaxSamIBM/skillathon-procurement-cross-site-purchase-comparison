@@ -1,0 +1,5 @@
+rule_id,unit_alias,plant,labels_per_unit,note
+UC-001,ROLL-500,*,500,Roll of 500 labels
+UC-002,ROLL-1000,*,1000,Roll of 1000 labels
+UC-003,RL (500),Plant C,500,Plant C writes the roll size in brackets
+UC-004,M,*,1000,M = one thousand labels; quantity and price are both per thousand

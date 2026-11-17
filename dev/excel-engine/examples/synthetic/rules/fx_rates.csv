@@ -1,0 +1,2 @@
+rule_id,currency,rate_to_reporting,reporting_currency,as_of,source_note
+FX-001,EUR,1.08,USD,2026-10-31,Illustrative synthetic rate - replace with the client's approved rate

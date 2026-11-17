@@ -16,7 +16,7 @@ from decimal import Decimal
 from openpyxl import load_workbook
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, ROOT)
 
 import run as runner  # noqa: E402
 from ppc.rules import Rules, RulesError  # noqa: E402

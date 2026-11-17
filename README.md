@@ -1,45 +1,62 @@
-# cross-site-purchase-comparison  (v0.1.0, first pass)
+# cross-site-purchase-comparison (v0.2.0)
 
-Compares what different plants pay for the same packaging item. It takes messy purchase exports from several plants, works out which purchases can **fairly** be compared, and returns ranked price differences worth investigating. Every number traces to a source row. Anything uncertain goes to a person.
+CSV-first workflow to compare prices for the same approved packaging specifications across plants. It preserves source reconciliation, explicit rules, approved-equivalence controls and human gates. Results are scenarios for buyer review, not achieved or guaranteed savings.
 
-Read [`skills/cross-site-purchase-comparison/SKILL.md`](skills/cross-site-purchase-comparison/SKILL.md) for workflow metadata, chat invocation guidance, triggers, inputs, outputs, the flow and the limits.
+Read [`skills/cross-site-purchase-comparison/SKILL.md`](skills/cross-site-purchase-comparison/SKILL.md) for chat invocation guidance, required uploads, gates, outputs and limitations.
 
-## Repository layout
+## Workflow package
 
 ```
 skills/cross-site-purchase-comparison/
-  SKILL.md      workflow instructions and metadata
-  scripts/      deterministic generate_* entry point
-  run.py, ppc/  local runner and bundled modules
-  examples/     synthetic plant files, rules pack, decision stages, expected results
-  tests/        pipeline and entry-point tests
+  SKILL.md
+  scripts/generate_cross_site_purchase_comparison.py  # self-contained stdlib entry point
+  examples/synthetic/                                 # synthetic CSVs, rules, decisions
+  tests/
 ```
 
-## Try it in a minute (synthetic data, no client data)
+The Process Studio path is chat-invoked and must not rely on arbitrary CLI flags. The entry script does not import the legacy local `ppc` or `run` modules and has no third-party dependency. It reads CSV only; no XLSX or `openpyxl` support.
+
+## Chat flow
+
+Ask the user for one CSV purchase export per plant, a scope describing plant names/category/reporting currency/date window, the applicable rules pack, and any human decisions. Ask users with Excel workbooks to export CSV before uploading. Verify scope and source mappings with the user before Gate 1; similarity proposals require a person at Gate 2, and Gate 3 requires explicit final sign-off. Do not guess at data, mappings, conversions or equivalences.
+
+For local testing (not a claim about Process Studio's undocumented staging contract), stage files under the current working directory:
 
 ```
-pip install openpyxl
-cd skills/cross-site-purchase-comparison
-python3 examples/synthetic/generate_examples.py        # creates the four messy plant files
-E=examples/synthetic
-python3 run.py --scope $E/scope.json --rules $E/rules --decisions $E/decisions_0_start.json         --out out0   # stops at Gate 1
-python3 run.py --scope $E/scope.json --rules $E/rules --decisions $E/decisions_1_scope_confirmed.json --out out1   # DRAFT
-python3 run.py --scope $E/scope.json --rules $E/rules --decisions $E/decisions_2_signed_off.json     --out out2   # FINAL
-python3 -m unittest discover -s tests                  # 29 tests
+working-dir/
+  scope.json
+  decisions.json        # optional until a human decision is recorded
+  rules/                # complete rules pack
+  inputs_csv/           # CSVs at paths referenced in scope.json
 ```
 
-## What the demo shows
+Run with that directory as current working directory:
 
-| Run | Result |
-|---|---|
-| 0. Start | **Stops at Gate 1.** Plant D's two unfamiliar headers need a person to map them. |
-| 1. Scope confirmed | **DRAFT.** Plant A is $70.00 per 1,000 labels against Plant B's $60.00, a $20,000 scenario on 2,000,000 labels. Plant D's abbreviated description is *proposed*, not counted. |
-| 2. Signed off | **FINAL.** The buyer approved Plant D's match, adding a $2,112 scenario. All seven release checks pass. |
+```
+python3 /path/to/skills/cross-site-purchase-comparison/scripts/generate_cross_site_purchase_comparison.py
+```
 
-Planted traps (full list in `examples/synthetic/TRAPS.md`): different headers per plant, roll price vs per-label price, specification Y kept out, a roll with no pack size, EUR prices, an abbreviated description, an out-of-window order, a blank quantity, a small spot order and an ex-works price that must not set the benchmark.
+No flags or package installation are required. All scope-relative input paths and the output directory are checked using real paths; symlink/path escapes fail closed. Outputs are written under `working-dir/out/`:
 
-## Status and honesty notes
-- **Tested on synthetic data only.** 29 tests pass. Two rules were deliberately broken (a wrong pack size, a false specification equivalence) and the tests failed as they should.
-- **Not yet checked:** that Process Studio can run this script, read uploaded `.xlsx` files and write a workbook; whether similar skills already exist in Process Studio; whether the name is free; whether the client agreement allows reusing the method.
-- **Savings figures are illustrative scenarios**, not results. The EUR rate is made up. No real client numbers appear anywhere.
-- No pilot has been run, so there are no measured time savings or accuracy figures. A pilot should measure analyst preparation time, buyer-validated findings, and false matches.
+- `run_report.json` — status, file hashes, column mappings, row/totals reconciliation, gate state, release checks and traceable findings.
+- `opportunities.csv` — ranked potential price gaps with traceable rows and assumptions; withheld until Gate 1 is confirmed and reconciliation passes.
+- `needs_review.csv` — Gate 1 issues, unresolved matching proposals, excluded lines and other cases needing attention.
+
+## Synthetic regression tests
+
+From the repository root:
+
+```
+python3 -m unittest skills.cross-site-purchase-comparison.tests.test_csv_generate -v
+```
+
+Synthetic fixtures only; no client data is included. The older local CLI/workbook implementation is retained only for legacy tests/examples and is not used by the Process Studio entry point.
+
+## Limitations
+
+One category (packaging labels), one price basis (per 1,000 labels), single reporting currency, one FX rate per currency; input is CSV only. Similarity is a proposal, never approval. Scenario savings require a buyer to verify achievable volume, location and terms. Process Studio's exact script staging/invocation and return contracts have not been verified; this package's CWD staging convention is documentation for a practical local workflow only.
+
+## Repository layout
+
+- `skills/cross-site-purchase-comparison/` is the only thing Process Studio scans. It is stdlib-only and CSV-only.
+- `dev/excel-engine/` is the earlier `.xlsx` engine (openpyxl). It is kept for local development only and is deliberately outside `skills/` so the BYOS scanner never sees it.

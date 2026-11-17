@@ -1,0 +1,4 @@
+plant,item_code,description,spec_id,status,approved_by
+Plant A,A-1001,"Product label, white, specification X",SPEC-X,approved,Category buyer (role)
+Plant B,880021,"White label, specification X",SPEC-X,approved,Category buyer (role)
+Plant C,C-77,"Label, specification Y",SPEC-Y,approved,Category buyer (role)

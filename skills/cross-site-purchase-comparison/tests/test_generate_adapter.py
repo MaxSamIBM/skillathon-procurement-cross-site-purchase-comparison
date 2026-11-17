@@ -23,16 +23,19 @@ class TestGenerateEntryPoint(unittest.TestCase):
         self.assertTrue(os.path.isfile(ENTRY_PATH))
         self.assertEqual(os.path.basename(ENTRY_PATH), "generate_cross_site_purchase_comparison.py")
 
-    def test_entry_runs_existing_pipeline(self):
-        with tempfile.TemporaryDirectory(dir=ROOT) as out:
-            result = json.loads(entry.generate_cross_site_purchase_comparison(
-                os.path.join(EX, "scope.json"),
-                os.path.join(EX, "rules"),
-                os.path.join(EX, "decisions_0_start.json"),
-                out,
-            ))
+    def test_entry_exposes_cwd_staged_generator(self):
+        self.assertTrue(callable(entry.generate))
+        with tempfile.TemporaryDirectory(dir=ROOT) as staged:
+            import shutil
+            from unittest.mock import patch
+            shutil.copy(os.path.join(EX, "scope_csv.json"), os.path.join(staged, "scope.json"))
+            shutil.copytree(os.path.join(EX, "rules"), os.path.join(staged, "rules"))
+            shutil.copytree(os.path.join(EX, "inputs_csv"), os.path.join(staged, "inputs_csv"))
+            shutil.copy(os.path.join(EX, "decisions_0_start.json"), os.path.join(staged, "decisions.json"))
+            with patch("os.getcwd", return_value=staged):
+                result = entry.generate()
             self.assertEqual(result["status"], "STOPPED_AT_GATE_1")
-            self.assertTrue(os.path.isfile(os.path.join(out, "run_report.json")))
+            self.assertTrue(os.path.isfile(os.path.join(staged, "out", "run_report.json")))
 
 
 if __name__ == "__main__":

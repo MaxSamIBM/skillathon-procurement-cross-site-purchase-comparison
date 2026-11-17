@@ -1,0 +1,39 @@
+{
+  "_doc": "Hand-calculated expected results for the signed-off run (decisions_2_signed_off.json). Written before the engine, so the tests check the engine against the arithmetic, not against itself. All data synthetic.",
+  "status": "FINAL",
+  "benchmark": { "group": "SPEC-X | standard | delivered", "plant": "Plant B", "price_per_1000": 60.00 },
+  "opportunities": [
+    {
+      "rank": 1, "plant": "Plant A", "spec_id": "SPEC-X",
+      "price_per_1000": 70.00, "benchmark_price_per_1000": 60.00,
+      "labels": 2000000, "scenario_saving": 20000.00,
+      "_calc": "$35 per ROLL-500 = $70/1000; 4 in-window orders x 1000 rolls x 500 = 2,000,000 labels; (70-60) x 2000 = 20,000"
+    },
+    {
+      "rank": 2, "plant": "Plant D", "spec_id": "SPEC-X",
+      "price_per_1000": 62.64, "benchmark_price_per_1000": 60.00,
+      "labels": 800000, "scenario_saving": 2112.00,
+      "_calc": "EUR 58 per M x 1.08 = $62.64/1000; 2 orders x 400 M = 800,000 labels; 2.64 x 800 = 2,112"
+    }
+  ],
+  "must_be_in_needs_review": [
+    { "plant": "Plant B", "reason_contains": "quantity" },
+    { "plant": "Plant C", "reason_contains": "pack size" },
+    { "plant": "Plant D", "reason_contains": "no approved match" }
+  ],
+  "must_be_excluded": [
+    { "plant": "Plant A", "reason_contains": "outside the comparison window" }
+  ],
+  "must_not_be_compared": [
+    { "plant": "Plant C", "why": "specification Y has no approved equivalence to X" },
+    { "plant": "Plant B", "unit_price": 75.00, "why": "small spot order, different volume band" },
+    { "plant": "Plant B", "unit_price": 52.00, "why": "EXW, different freight class" }
+  ],
+  "draft_run": {
+    "_doc": "decisions_1_scope_confirmed.json: Gate 2 not done, so Plant D's proposed match is held back.",
+    "status": "DRAFT",
+    "opportunity_plants": ["Plant A"],
+    "plant_A_saving": 20000.00
+  },
+  "start_run": { "status": "STOPPED_AT_GATE_1" }
+}

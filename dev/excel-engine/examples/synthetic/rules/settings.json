@@ -1,0 +1,15 @@
+{
+  "_doc": "Comparison conditions. Purchases are compared only inside the same cell of (specification, order-size band, freight class). Bands use labels per order line.",
+  "price_basis_labels": 1000,
+  "matching": { "propose_threshold": 0.6 },
+  "volume_bands": [
+    { "name": "small", "below_labels_per_order": 100000 },
+    { "name": "standard", "below_labels_per_order": null }
+  ],
+  "freight_groups": {
+    "DAP": "delivered", "DDP": "delivered", "CPT": "delivered", "CIP": "delivered",
+    "EXW": "ex-works", "FCA": "ex-works", "FOB": "ex-works"
+  },
+  "min_plants_per_group": 2,
+  "amount_tolerance": 0.01
+}
