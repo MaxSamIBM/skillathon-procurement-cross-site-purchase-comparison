@@ -33,7 +33,7 @@ Do **not** use it to claim achieved savings, to compare across specifications no
 | Input | What it is | Changes per client? |
 |---|---|---|
 | Plant exports | One `.csv` per plant (header row anywhere in the first 30 rows; total rows allowed). Excel inputs must be exported to CSV before upload; `.xlsx` is not accepted. | Yes |
-| `scope.json` | Category, reporting currency, comparison window, and per plant a `file` name (bare `.csv` name, no folders) plus optional `date_format` | Yes |
+| `scope.json` (or `scope_csv.json`) | Category, reporting currency, comparison window, and per plant a `file` name (bare `.csv` name, no folders) plus optional `date_format` | Yes |
 | `rules/columns.json` | Which column headers mean which standard field | Add the client's header names |
 | `rules/specs.csv`, `item_map.csv` | Approved specifications, and which plant item code or description is which specification | Yes (a buyer approves) |
 | `rules/spec_equivalences.csv` | Specifications a buyer has approved as interchangeable. **Empty by default.** | Yes (a buyer approves) |
@@ -41,13 +41,13 @@ Do **not** use it to claim achieved savings, to compare across specifications no
 | `rules/fx_rates.csv` | Currency to reporting currency, with date and source | Yes (client's approved rate) |
 | `rules/settings.json` | Order-size bands, freight groups, minimum plants per group | Tune per category |
 | `rules/abbreviations.csv` | Short forms used to propose matches | Optional |
-| `decisions.json` | The human decisions: Gate 1, column overrides, Gate 2 match decisions, Gate 3 sign-off | Yes (a person writes it) |
+| `decisions.json` (or a single `decisions_*.json`) | The human decisions: Gate 1, column overrides, Gate 2 match decisions, Gate 3 sign-off | Yes (a person writes it) |
 
 Templates and a worked example are in `examples/synthetic/`.
 
 ## Deterministic entry point
 
-The deterministic entry script is `scripts/generate_cross_site_purchase_comparison.py`. It is self-contained, uses only Python's standard library, accepts CSV source files only, and runs without `run.py`, `ppc/`, third-party packages or arbitrary command-line flags. For the documented staged-file convention, the current working directory contains `scope.json`, `rules/`, `decisions.json`, and an `inputs_csv/` folder holding the plant CSVs named in scope; the script writes `out/run_report.json`, `out/opportunities.csv`, and `out/needs_review.csv`. This convention is a practical documentation example, not a claim about Process Studio's undocumented argument, staging, or return contract. Process Studio execution must be invoked from chat and must not rely on CLI flags.
+The deterministic entry script is `scripts/generate_cross_site_purchase_comparison.py`. It is self-contained, uses only Python's standard library, accepts CSV source files only, and runs without `run.py`, `ppc/`, third-party packages or arbitrary command-line flags. For the documented staged-file convention, the current working directory contains `scope.json` or `scope_csv.json`, a `rules/` folder, one decisions file (`decisions.json` or a single `decisions_*.json`), and an `inputs_csv/` folder holding the plant CSVs named in scope; the script writes `out/run_report.json`, `out/opportunities.csv`, and `out/needs_review.csv`. This convention is a practical documentation example, not a claim about Process Studio's undocumented argument, staging, or return contract. Process Studio execution must be invoked from chat and must not rely on CLI flags.
 
 ## Chat-invoked flow and staged files
 
