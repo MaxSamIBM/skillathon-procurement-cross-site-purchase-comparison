@@ -28,38 +28,16 @@ class WorkflowError(ValueError):
     pass
 
 
-def _inside(base, path):
-    base_real, path_real = os.path.realpath(base), os.path.realpath(path)
-    try:
-        return os.path.commonpath((base_real, path_real)) == base_real
-    except ValueError:
-        return False
-
-
+SCOPE_FILE = "scope.json"
+DECISIONS_FILE = "decisions.json"
+RULES_DIR = "rules"
 INPUT_DIR = "inputs_csv"
+OUT_DIR = "out"
 
 
-def _input_index(folder):
-    """List the fixed input folder. Only regular .csv files found here can ever be opened;
-    no path is built from user-supplied text."""
-    index = {}
-    with os.scandir(folder) as entries:
-        for entry in entries:
-            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(".csv"):
-                if _inside(folder, entry.path):
-                    index[entry.name] = entry.path
-    return index
-
-
-def _child(base, name, must_exist=True, directory=False):
-    if not isinstance(name, str) or not name or name in (".", "..") or os.path.basename(name) != name or "\x00" in name:
-        raise WorkflowError(f"Invalid file name: {name!r}")
-    path = os.path.realpath(os.path.join(base, name))
-    if not _inside(base, path):
-        raise WorkflowError(f"File '{name}' resolves outside '{base}'")
-    if must_exist and not (os.path.isdir(path) if directory else os.path.isfile(path)):
-        raise WorkflowError(f"Required {'directory' if directory else 'file'} not found: {path}")
-    return path
+def _regular(path):
+    """True for an existing regular file that is not a symlink."""
+    return os.path.isfile(path) and not os.path.islink(path)
 
 
 def _hash(path):
@@ -103,10 +81,13 @@ def _read_csv(path, required=()):
                 for row in rd if any((v or "").strip() for v in row.values())]
 
 
-def _load_rules(folder):
-    if not os.path.isdir(folder):
-        raise WorkflowError(f"Rules folder not found: {folder}")
-    paths = {n: _child(folder, n) for n in RULE_FILES}
+def _load_rules():
+    if not os.path.isdir(RULES_DIR) or os.path.islink(RULES_DIR):
+        raise WorkflowError(f"Rules folder not found: {RULES_DIR}/")
+    paths = {n: os.path.join(RULES_DIR, n) for n in RULE_FILES}
+    for n, rule_path in paths.items():
+        if not _regular(rule_path):
+            raise WorkflowError(f"Required rules file not found: {RULES_DIR}/{n}")
     fingerprints = {n: _hash(p) for n, p in paths.items()}
     columns = _json(paths["columns.json"], "columns.json")
     required = columns["required"]
@@ -553,32 +534,43 @@ def _produce(out_dir, report, lines, opportunities, queue, g1):
         f.write("\n")
 
 
-def _run(cwd):
-    scope_path = _child(cwd, "scope.json")
-    rules_dir = _child(cwd, "rules", directory=True)
-    decisions_path = _child(cwd, "decisions.json", must_exist=False)
-    out_dir = os.path.join(cwd, "out")
-    os.makedirs(out_dir, exist_ok=True)
-    if not _inside(cwd, out_dir):
-        raise WorkflowError("Output directory resolves outside the staged working directory")
-    scope = _json(scope_path, "scope.json")
-    decisions = _json(decisions_path, "decisions.json") if os.path.isfile(decisions_path) else {}
+def _run():
+    if not _regular(SCOPE_FILE):
+        raise WorkflowError(f"Required file not found: {SCOPE_FILE}")
+    if os.path.lexists(DECISIONS_FILE) and not _regular(DECISIONS_FILE):
+        raise WorkflowError(f"{DECISIONS_FILE} must be a regular file")
+    if not os.path.isdir(INPUT_DIR) or os.path.islink(INPUT_DIR):
+        raise WorkflowError(f"Required folder not found: {INPUT_DIR}/")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    scope = _json(SCOPE_FILE, "scope.json")
+    decisions = _json(DECISIONS_FILE, "decisions.json") if _regular(DECISIONS_FILE) else {}
     for key in ("reporting_currency", "window", "files"):
         if key not in scope: raise WorkflowError(f"scope is missing '{key}'")
     if len(scope["files"]) < 2: raise WorkflowError("At least two plant CSV files are needed")
     start, end = dt.date.fromisoformat(scope["window"]["start"]), dt.date.fromisoformat(scope["window"]["end"])
     if start > end: raise WorkflowError("Comparison window starts after it ends")
-    rules = _load_rules(rules_dir)
-    index = _input_index(_child(cwd, INPUT_DIR, directory=True))
-    files, resolved = [], []
-    overrides = decisions.get("column_overrides", {})
     for item in scope["files"]:
         name = item.get("file")
         if not isinstance(name, str) or not name.lower().endswith(".csv"):
             raise WorkflowError(f"Scope entry for {item.get('plant')!r} must give 'file' as a .csv file name in {INPUT_DIR}/")
-        if name not in index:
-            raise WorkflowError(f"'{name}' is not a CSV file found in {INPUT_DIR}/ (files there: {sorted(index)})")
-        path = index[name]
+    rules = _load_rules()
+    # Scope names are only ever compared with the folder listing; the files that get opened
+    # are the listing's own entries, so scope text never becomes part of a path.
+    matched = []
+    with os.scandir(INPUT_DIR) as listing:
+        for entry in sorted(listing, key=lambda e: e.name):
+            if entry.is_file(follow_symlinks=False):
+                for position, item in enumerate(scope["files"]):
+                    if entry.name == item["file"]:
+                        matched.append((position, item, entry.path))
+    matched.sort(key=lambda m: m[0])
+    if len(matched) != len(scope["files"]):
+        found = {m[1]["file"] for m in matched}
+        absent = [i["file"] for i in scope["files"] if i["file"] not in found]
+        raise WorkflowError(f"CSV file(s) named in scope not found in {INPUT_DIR}/: {absent}")
+    overrides = decisions.get("column_overrides", {})
+    files, resolved = [], []
+    for _, item, path in matched:
         resolved.append(path)
         files.append(_load_file(item["plant"], path, rules, overrides.get(item["plant"], {}), item.get("date_format")))
     report = {"skill": "cross-site-purchase-comparison", "version": VERSION,
@@ -595,13 +587,13 @@ def _run(cwd):
     lines = [ln for f in files for ln in f["rows"]]
     if gate1:
         report.update(status="STOPPED_AT_GATE_1", gate1_open=gate1, counts={"lines_loaded": len(lines)})
-        _produce(out_dir, report, lines, [], [], True)
+        _produce(OUT_DIR, report, lines, [], [], True)
         return report
     recon_bad = [f"{f['plant']} ({f['file']}): rows {f['reconciliation']['row_check']}, totals {f['reconciliation']['total_check']}" for f in files
                  if f["reconciliation"]["row_check"] != "PASS" or f["reconciliation"]["total_check"] == "FAIL"]
     if recon_bad:
         report.update(status="STOPPED_RECONCILIATION", reconciliation_failures=recon_bad)
-        _produce(out_dir, report, lines, [], [], False)
+        _produce(OUT_DIR, report, lines, [], [], False)
         return report
     reporting = scope["reporting_currency"].upper()
     _match(lines, rules, decisions.get("match_decisions", []))
@@ -625,14 +617,14 @@ def _run(cwd):
         report["gates"] = [{"gate": "Gate 1", "status": "confirmed", "by": decisions.get("gate1", {}).get("by", "unnamed")},
                            {"gate": "Gate 2", "status": "open" if queue else "resolved", "pending_matches": len(queue)},
                            {"gate": "Gate 3", "status": "approved" if report["status"] == "FINAL" else "open", "by": gate3.get("by", "")}]
-    _produce(out_dir, report, lines, opportunities, queue, False)
+    _produce(OUT_DIR, report, lines, opportunities, queue, False)
     return report
 
 
 def generate():
-    """Run from a CWD containing the documented staged files and return a report dict."""
+    """Run in the current working folder (which holds the documented staged files) and return a report dict."""
     try:
-        return _run(os.path.realpath(os.getcwd()))
+        return _run()
     except (WorkflowError, OSError, KeyError, TypeError, ValueError) as exc:
         return {"status": "ERROR", "error": str(exc)}
 

@@ -7,7 +7,21 @@ import os
 import tempfile
 import unittest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+import contextlib as _contextlib
+
+
+@_contextlib.contextmanager
+def _in_dir(folder):
+    previous = os.getcwd()
+    os.chdir(folder)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "skills", "cross-site-purchase-comparison")
 ENTRY_PATH = os.path.join(ROOT, "scripts", "generate_cross_site_purchase_comparison.py")
 EX = os.path.join(ROOT, "examples", "synthetic")
 
@@ -25,14 +39,13 @@ class TestGenerateEntryPoint(unittest.TestCase):
 
     def test_entry_exposes_cwd_staged_generator(self):
         self.assertTrue(callable(entry.generate))
-        with tempfile.TemporaryDirectory(dir=ROOT) as staged:
+        with tempfile.TemporaryDirectory() as staged:
             import shutil
-            from unittest.mock import patch
             shutil.copy(os.path.join(EX, "scope_csv.json"), os.path.join(staged, "scope.json"))
             shutil.copytree(os.path.join(EX, "rules"), os.path.join(staged, "rules"))
             shutil.copytree(os.path.join(EX, "inputs_csv"), os.path.join(staged, "inputs_csv"))
             shutil.copy(os.path.join(EX, "decisions_0_start.json"), os.path.join(staged, "decisions.json"))
-            with patch("os.getcwd", return_value=staged):
+            with _in_dir(staged):
                 result = entry.generate()
             self.assertEqual(result["status"], "STOPPED_AT_GATE_1")
             self.assertTrue(os.path.isfile(os.path.join(staged, "out", "run_report.json")))

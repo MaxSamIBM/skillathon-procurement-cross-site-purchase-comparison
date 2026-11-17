@@ -88,4 +88,4 @@ Change only: the plant exports, `scope.json`, the rules pack (headers, specifica
 - Variance analysis itself isn't new (procurement suites offer it). What's new here is the comparability method for inconsistent exports and the guarantees above. **A search of existing Process Studio skills and public assets has not been done yet.**
 
 ## Files
-`SKILL.md` (chat-invoked workflow instructions) · `scripts/generate_cross_site_purchase_comparison.py` (self-contained standard-library entry point) · `tests/` · `examples/synthetic/` (synthetic CSV plant files, rules pack, decision stages and expected results). The legacy local CLI and workbook code are not part of the Process Studio workflow path.
+`SKILL.md` (chat-invoked workflow instructions) · `scripts/generate_cross_site_purchase_comparison.py` (self-contained standard-library entry point) · `examples/synthetic/` (synthetic CSV plant files, rules pack, decision stages and expected results). The legacy local CLI and workbook code are not part of the Process Studio workflow path.

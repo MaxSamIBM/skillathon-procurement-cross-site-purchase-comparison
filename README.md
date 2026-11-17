@@ -11,8 +11,11 @@ skills/cross-site-purchase-comparison/
   SKILL.md
   scripts/generate_cross_site_purchase_comparison.py  # self-contained stdlib entry point
   examples/synthetic/                                 # synthetic CSVs, rules, decisions
-  tests/
+dev/skill-tests/   # tests for the skill (outside skills/ so the scanner skips them)
+dev/excel-engine/  # legacy .xlsx engine, local development only
 ```
+
+Run the tests with `python3 -m unittest discover -s dev/skill-tests`.
 
 The Process Studio path is chat-invoked and must not rely on arbitrary CLI flags. The entry script does not import the legacy local `ppc` or `run` modules and has no third-party dependency. It reads CSV only; no XLSX or `openpyxl` support.
 

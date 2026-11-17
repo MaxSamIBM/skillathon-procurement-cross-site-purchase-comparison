@@ -7,9 +7,22 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+import contextlib as _contextlib
+
+
+@_contextlib.contextmanager
+def _in_dir(folder):
+    previous = os.getcwd()
+    os.chdir(folder)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "skills", "cross-site-purchase-comparison")
 ENTRY = os.path.join(ROOT, "scripts", "generate_cross_site_purchase_comparison.py")
 EX = os.path.join(ROOT, "examples", "synthetic")
 
@@ -25,7 +38,7 @@ class TestCsvGenerate(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.staged(tmp.name, decisions)
-        with patch("os.getcwd", return_value=tmp.name):
+        with _in_dir(tmp.name):
             # Entry discovers fixed names under the current working directory.
             import importlib.util
             spec = importlib.util.spec_from_file_location("csv_generate_test", ENTRY)
@@ -69,14 +82,14 @@ class TestCsvGenerate(unittest.TestCase):
         self.addCleanup(lambda: os.path.exists(outside.name) and os.unlink(outside.name))
         os.unlink(input_file)
         os.symlink(outside.name, input_file)
-        with patch("os.getcwd", return_value=root):
+        with _in_dir(root):
             import importlib.util
             spec = importlib.util.spec_from_file_location("csv_generate_escape_test", ENTRY)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             result = module.generate()
         self.assertEqual(result["status"], "ERROR")
-        self.assertIn("not a csv file found in inputs_csv", result["error"].lower())
+        self.assertIn("not found in inputs_csv", result["error"].lower())
 
     def test_scope_file_name_with_folders_is_refused(self):
         root, _ = self.execute()
@@ -86,14 +99,14 @@ class TestCsvGenerate(unittest.TestCase):
         scope["files"][0]["file"] = os.path.join(os.pardir, os.pardir, "secret.csv")
         with open(scope_file, "w", encoding="utf-8") as f:
             json.dump(scope, f)
-        with patch("os.getcwd", return_value=root):
+        with _in_dir(root):
             import importlib.util
             spec = importlib.util.spec_from_file_location("csv_generate_name_test", ENTRY)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             result = module.generate()
         self.assertEqual(result["status"], "ERROR")
-        self.assertIn("not a csv file found in inputs_csv", result["error"].lower())
+        self.assertIn("not found in inputs_csv", result["error"].lower())
 
 
 if __name__ == "__main__":
