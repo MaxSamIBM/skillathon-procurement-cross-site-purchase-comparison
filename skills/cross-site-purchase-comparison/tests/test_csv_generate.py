@@ -76,7 +76,24 @@ class TestCsvGenerate(unittest.TestCase):
             spec.loader.exec_module(module)
             result = module.generate()
         self.assertEqual(result["status"], "ERROR")
-        self.assertIn("outside", result["error"].lower())
+        self.assertIn("not a csv file found in inputs_csv", result["error"].lower())
+
+    def test_scope_file_name_with_folders_is_refused(self):
+        root, _ = self.execute()
+        scope_file = os.path.join(root, "scope.json")
+        with open(scope_file, encoding="utf-8") as f:
+            scope = json.load(f)
+        scope["files"][0]["file"] = os.path.join(os.pardir, os.pardir, "secret.csv")
+        with open(scope_file, "w", encoding="utf-8") as f:
+            json.dump(scope, f)
+        with patch("os.getcwd", return_value=root):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("csv_generate_name_test", ENTRY)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            result = module.generate()
+        self.assertEqual(result["status"], "ERROR")
+        self.assertIn("not a csv file found in inputs_csv", result["error"].lower())
 
 
 if __name__ == "__main__":

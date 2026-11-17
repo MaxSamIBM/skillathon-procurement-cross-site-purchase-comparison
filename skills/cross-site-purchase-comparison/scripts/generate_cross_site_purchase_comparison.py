@@ -36,15 +36,19 @@ def _inside(base, path):
         return False
 
 
-def _confined(base, rel, what, must_exist=False):
-    if not isinstance(rel, str) or not rel.strip() or "\x00" in rel or os.path.isabs(rel):
-        raise WorkflowError(f"Invalid {what} path: {rel!r}")
-    path = os.path.realpath(os.path.join(base, rel))
-    if not _inside(base, path):
-        raise WorkflowError(f"{what} path '{rel}' resolves outside '{base}'")
-    if must_exist and not os.path.isfile(path):
-        raise WorkflowError(f"{what} file not found: {rel}")
-    return path
+INPUT_DIR = "inputs_csv"
+
+
+def _input_index(folder):
+    """List the fixed input folder. Only regular .csv files found here can ever be opened;
+    no path is built from user-supplied text."""
+    index = {}
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(".csv"):
+                if _inside(folder, entry.path):
+                    index[entry.name] = entry.path
+    return index
 
 
 def _child(base, name, must_exist=True, directory=False):
@@ -565,14 +569,16 @@ def _run(cwd):
     start, end = dt.date.fromisoformat(scope["window"]["start"]), dt.date.fromisoformat(scope["window"]["end"])
     if start > end: raise WorkflowError("Comparison window starts after it ends")
     rules = _load_rules(rules_dir)
-    base = os.path.dirname(scope_path)
+    index = _input_index(_child(cwd, INPUT_DIR, directory=True))
     files, resolved = [], []
     overrides = decisions.get("column_overrides", {})
     for item in scope["files"]:
-        rel = item.get("path", "")
-        if not isinstance(rel, str) or not rel.lower().endswith(".csv"):
-            raise WorkflowError(f"Input '{rel}' is not a CSV file; only .csv inputs are supported")
-        path = _confined(base, rel, "Scope input", must_exist=True)
+        name = item.get("file")
+        if not isinstance(name, str) or not name.lower().endswith(".csv"):
+            raise WorkflowError(f"Scope entry for {item.get('plant')!r} must give 'file' as a .csv file name in {INPUT_DIR}/")
+        if name not in index:
+            raise WorkflowError(f"'{name}' is not a CSV file found in {INPUT_DIR}/ (files there: {sorted(index)})")
+        path = index[name]
         resolved.append(path)
         files.append(_load_file(item["plant"], path, rules, overrides.get(item["plant"], {}), item.get("date_format")))
     report = {"skill": "cross-site-purchase-comparison", "version": VERSION,

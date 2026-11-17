@@ -30,7 +30,7 @@ Do **not** use it to claim achieved savings, to compare across specifications no
 | Input | What it is | Changes per client? |
 |---|---|---|
 | Plant exports | One `.csv` per plant (header row anywhere in the first 30 rows; total rows allowed). Excel inputs must be exported to CSV before upload; `.xlsx` is not accepted. | Yes |
-| `scope.json` | Category, reporting currency, comparison window, list of files and plants, optional `date_format` per file | Yes |
+| `scope.json` | Category, reporting currency, comparison window, and per plant a `file` name (bare `.csv` name, no folders) plus optional `date_format` | Yes |
 | `rules/columns.json` | Which column headers mean which standard field | Add the client's header names |
 | `rules/specs.csv`, `item_map.csv` | Approved specifications, and which plant item code or description is which specification | Yes (a buyer approves) |
 | `rules/spec_equivalences.csv` | Specifications a buyer has approved as interchangeable. **Empty by default.** | Yes (a buyer approves) |
@@ -44,13 +44,13 @@ Templates and a worked example are in `examples/synthetic/`.
 
 ## Deterministic entry point
 
-The deterministic entry script is `scripts/generate_cross_site_purchase_comparison.py`. It is self-contained, uses only Python's standard library, accepts CSV source files only, and runs without `run.py`, `ppc/`, third-party packages or arbitrary command-line flags. For the documented staged-file convention, the current working directory contains `scope.json`, `rules/`, `decisions.json`, and the CSV paths named in scope; the script writes `out/run_report.json`, `out/opportunities.csv`, and `out/needs_review.csv`. This convention is a practical documentation example, not a claim about Process Studio's undocumented argument, staging, or return contract. Process Studio execution must be invoked from chat and must not rely on CLI flags.
+The deterministic entry script is `scripts/generate_cross_site_purchase_comparison.py`. It is self-contained, uses only Python's standard library, accepts CSV source files only, and runs without `run.py`, `ppc/`, third-party packages or arbitrary command-line flags. For the documented staged-file convention, the current working directory contains `scope.json`, `rules/`, `decisions.json`, and an `inputs_csv/` folder holding the plant CSVs named in scope; the script writes `out/run_report.json`, `out/opportunities.csv`, and `out/needs_review.csv`. This convention is a practical documentation example, not a claim about Process Studio's undocumented argument, staging, or return contract. Process Studio execution must be invoked from chat and must not rely on CLI flags.
 
 ## Chat-invoked flow and staged files
 
 When this skill is invoked from chat, ask the user to upload one CSV per plant, the applicable scope and rules files, and any existing human decisions. Excel users must export as CSV. Verify the plant, category, date window, currency, source files and mapping before asking the user to confirm Gate 1; invocation is not approval. If rules or decisions are missing, request them or explain that the workflow cannot safely proceed. Do not infer mappings, units, FX, or equivalence.
 
-For local testing only, stage these items in a working directory: `scope.json`, `rules/`, optional `decisions.json`, plus source CSV files at the relative paths named by scope. Run `python3 /path/to/scripts/generate_cross_site_purchase_comparison.py` with that directory as the current working directory; it accepts no arbitrary flags. This staged-file example does not document or imply Process Studio's runtime argument contract. Python 3 standard library only; no package installation required. The script writes results under `out/` within the working directory.
+For local testing only, stage these items in a working directory: `scope.json`, `rules/`, optional `decisions.json`, plus the plant CSVs inside `inputs_csv/`. Scope names each file by bare file name only; the script lists `inputs_csv/` and opens only CSV files it finds there, so no path from user input reaches a file operation. Run `python3 /path/to/scripts/generate_cross_site_purchase_comparison.py` with that directory as the current working directory; it accepts no arbitrary flags. This staged-file example does not document or imply Process Studio's runtime argument contract. Python 3 standard library only; no package installation required. The script writes results under `out/` within the working directory.
 
 ## The flow  (code does everything except the three decisions)
 

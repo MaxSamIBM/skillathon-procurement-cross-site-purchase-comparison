@@ -9,19 +9,19 @@
   "files": [
     {
       "plant": "Plant A",
-      "path": "inputs_csv/plant_A_purchases.csv"
+      "file": "plant_A_purchases.csv"
     },
     {
       "plant": "Plant B",
-      "path": "inputs_csv/plant_B_export.csv"
+      "file": "plant_B_export.csv"
     },
     {
       "plant": "Plant C",
-      "path": "inputs_csv/plant_C_report.csv"
+      "file": "plant_C_report.csv"
     },
     {
       "plant": "Plant D",
-      "path": "inputs_csv/plant_D_extract.csv",
+      "file": "plant_D_extract.csv",
       "date_format": "%d.%m.%Y"
     }
   ]
