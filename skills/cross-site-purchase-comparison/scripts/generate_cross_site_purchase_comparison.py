@@ -18,7 +18,7 @@ import sys
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 RULE_FILES = ("columns.json", "settings.json", "specs.csv", "item_map.csv",
               "spec_equivalences.csv", "abbreviations.csv", "unit_conversions.csv", "fx_rates.csv")
 TOTAL_RE = re.compile(r"\b(grand\s*total|sub\s*-?\s*total|total)\b", re.I)
