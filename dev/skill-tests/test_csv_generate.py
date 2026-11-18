@@ -6,7 +6,9 @@ import json
 import os
 import shutil
 import tempfile
+import sys
 import unittest
+from unittest import mock
 
 
 import contextlib as _contextlib
@@ -23,7 +25,7 @@ def _in_dir(folder):
 
 
 ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "skills", "cross-site-purchase-comparison")
-ENTRY = os.path.join(ROOT, "scripts", "generate_cross_site_purchase_comparison.py")
+ENTRY = os.path.join(ROOT, "scripts", "compare_prices.py")
 EX = os.path.join(ROOT, "examples", "synthetic")
 
 
@@ -63,7 +65,7 @@ class TestCsvGenerate(unittest.TestCase):
         imports.update(node.module.split(".")[0] for node in ast.walk(tree)
                        if isinstance(node, ast.ImportFrom) and node.module)
         self.assertFalse(imports & {"ppc", "run", "openpyxl"})
-        self.assertEqual(os.path.basename(ENTRY), "generate_cross_site_purchase_comparison.py")
+        self.assertEqual(os.path.basename(ENTRY), "compare_prices.py")
 
     def test_final_run_writes_json_and_both_csv_artifacts(self):
         root, result = self.execute()
@@ -213,7 +215,7 @@ class BuiltInDemoTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with _in_dir(tmp):
                 buf = _io.StringIO()
-                with contextlib.redirect_stdout(buf):
+                with contextlib.redirect_stdout(buf), mock.patch.object(sys, "argv", ["compare_prices.py"]):
                     code = _load().main()
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(buf.getvalue())["mode"], "BUILT_IN_DEMO")
@@ -224,6 +226,80 @@ class BuiltInDemoTests(unittest.TestCase):
                 shutil.copy(os.path.join(EX, "inputs_csv", name), tmp)
             with _in_dir(tmp):
                 buf = _io.StringIO()
-                with contextlib.redirect_stdout(buf):
+                with contextlib.redirect_stdout(buf), mock.patch.object(sys, "argv", ["compare_prices.py"]):
                     _load().main()
         self.assertEqual(json.loads(buf.getvalue())["status"], "STOPPED_AT_GATE_1")
+
+
+class PlatformContractTests(unittest.TestCase):
+    """Names the platform stages (uploaded_<name>, .txt appended) and the manifest the platform checks."""
+
+    def _stage_uploaded(self, tmp, decisions=None):
+        shutil.copy(os.path.join(EX, "scope_csv.json"), os.path.join(tmp, "uploaded_scope_csv.json.txt"))
+        shutil.copy(os.path.join(EX, "rules.json"), os.path.join(tmp, "uploaded_rules.json.txt"))
+        for name in os.listdir(os.path.join(EX, "inputs_csv")):
+            shutil.copy(os.path.join(EX, "inputs_csv", name), os.path.join(tmp, "uploaded_" + name + ".txt"))
+        if decisions:
+            shutil.copy(os.path.join(EX, decisions), os.path.join(tmp, "decisions.json"))
+
+    def test_uploaded_names_run_end_to_end(self):
+        for decisions, status in ((None, "STOPPED_AT_GATE_1"), ("decisions_1_scope_confirmed.json", "DRAFT"),
+                                  ("decisions_2_signed_off.json", "FINAL")):
+            with tempfile.TemporaryDirectory() as tmp:
+                self._stage_uploaded(tmp, decisions)
+                with _in_dir(tmp):
+                    report = _load().generate()
+                self.assertEqual(report["status"], status, decisions)
+
+    def test_uploaded_names_give_same_result_as_plain_names(self):
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            self._stage_uploaded(a, "decisions_2_signed_off.json")
+            os.makedirs(os.path.join(b, "inputs_csv"))
+            for name in ("scope_csv.json", "rules.json"):
+                shutil.copy(os.path.join(EX, name), b)
+            shutil.copy(os.path.join(EX, "decisions_2_signed_off.json"), os.path.join(b, "decisions.json"))
+            for name in os.listdir(os.path.join(EX, "inputs_csv")):
+                shutil.copy(os.path.join(EX, "inputs_csv", name), os.path.join(b, "inputs_csv"))
+            for folder in (a, b):
+                with _in_dir(folder):
+                    _load().generate()
+            for name in ("opportunities.csv", "needs_review.csv"):
+                with open(os.path.join(a, "out", name), encoding="utf-8") as fa, open(os.path.join(b, "out", name), encoding="utf-8") as fb:
+                    self.assertEqual(fa.read(), fb.read(), name)
+
+    def test_plain_decisions_file_beats_uploaded_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._stage_uploaded(tmp, "decisions_2_signed_off.json")
+            shutil.copy(os.path.join(EX, "decisions_0_start.json"), os.path.join(tmp, "uploaded_decisions.json.txt"))
+            with _in_dir(tmp):
+                report = _load().generate()
+            self.assertEqual(report["status"], "FINAL")
+
+    def test_two_files_with_the_same_original_name_are_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._stage_uploaded(tmp)
+            shutil.copy(os.path.join(EX, "rules.json"), os.path.join(tmp, "uploaded_rules.json"))
+            with _in_dir(tmp):
+                report = _load().generate()
+            self.assertEqual(report["status"], "ERROR")
+            self.assertIn("attach it only once", report["error"])
+
+    def test_manifest_declares_the_entry_script_with_valid_arguments(self):
+        scripts = os.path.join(ROOT, "scripts")
+        with open(os.path.join(scripts, "manifest.json"), encoding="utf-8") as f:
+            manifest = json.load(f)
+        self.assertIn("compare_prices.py", manifest["scripts"])
+        self.assertTrue(os.path.isfile(os.path.join(scripts, "compare_prices.py")))
+        self.assertFalse(any(n.startswith("generate_") for n in os.listdir(scripts)))
+        for flag, spec in manifest["scripts"]["compare_prices.py"]["arguments"].items():
+            self.assertRegex(flag, r"^--[A-Za-z0-9-]+$")  # letters, digits, hyphens only
+            self.assertIn(spec["type"], ("enum", "string", "input_path", "output_path"))
+            for value in spec.get("values", []):
+                self.assertLessEqual(len(value), 4096)
+                self.assertNotRegex(value, r"[\r\n]")
+
+    def test_frontmatter_declares_what_the_platform_needs(self):
+        with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as f:
+            head = f.read().split("---")[1]
+        for needed in ("type: workflow", "multi_turn: true", "run_skill_script", "list_temp_files", "write_temp_file", "save_output_file"):
+            self.assertIn(needed, head)

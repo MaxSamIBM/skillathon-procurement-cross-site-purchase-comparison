@@ -1,4 +1,4 @@
-# cross-site-purchase-comparison (v0.3.0)
+# cross-site-purchase-comparison (v0.4.0)
 
 CSV-first workflow to compare prices for the same approved packaging specifications across plants. It preserves source reconciliation, explicit rules, approved-equivalence controls and human gates. Results are scenarios for buyer review, not achieved or guaranteed savings.
 
@@ -9,7 +9,7 @@ Read [`skills/cross-site-purchase-comparison/SKILL.md`](skills/cross-site-purcha
 ```
 skills/cross-site-purchase-comparison/
   SKILL.md
-  scripts/generate_cross_site_purchase_comparison.py  # self-contained stdlib entry point
+  scripts/compare_prices.py  # self-contained stdlib entry point
   examples/synthetic/                                 # synthetic CSVs, rules (folder + rules.json), decisions
 dev/skill-tests/   # tests for the skill (outside skills/ so the scanner skips them)
 dev/excel-engine/  # legacy .xlsx engine, local development only
@@ -38,7 +38,7 @@ working-dir/
 **Your own files:** Run with that directory as current working directory:
 
 ```
-python3 /path/to/skills/cross-site-purchase-comparison/scripts/generate_cross_site_purchase_comparison.py
+python3 /path/to/skills/cross-site-purchase-comparison/scripts/compare_prices.py
 ```
 
 No flags or package installation are required. All scope-relative input paths and the output directory are checked using real paths; symlink/path escapes fail closed. Outputs are written under `working-dir/out/`:

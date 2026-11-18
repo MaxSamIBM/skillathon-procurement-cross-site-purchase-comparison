@@ -22,7 +22,7 @@ def _in_dir(folder):
 
 
 ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "skills", "cross-site-purchase-comparison")
-ENTRY_PATH = os.path.join(ROOT, "scripts", "generate_cross_site_purchase_comparison.py")
+ENTRY_PATH = os.path.join(ROOT, "scripts", "compare_prices.py")
 EX = os.path.join(ROOT, "examples", "synthetic")
 
 _spec = importlib.util.spec_from_file_location("ppc_process_studio_entry", ENTRY_PATH)
@@ -35,7 +35,7 @@ _spec.loader.exec_module(entry)
 class TestGenerateEntryPoint(unittest.TestCase):
     def test_script_is_in_discoverable_scripts_folder(self):
         self.assertTrue(os.path.isfile(ENTRY_PATH))
-        self.assertEqual(os.path.basename(ENTRY_PATH), "generate_cross_site_purchase_comparison.py")
+        self.assertEqual(os.path.basename(ENTRY_PATH), "compare_prices.py")
 
     def test_entry_exposes_cwd_staged_generator(self):
         self.assertTrue(callable(entry.generate))

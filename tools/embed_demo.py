@@ -3,7 +3,7 @@
 
 Run from anywhere:  python3 tools/embed_demo.py
 It rewrites the block between '# BEGIN DEMO DATA' and '# END DEMO DATA' in
-skills/cross-site-purchase-comparison/scripts/generate_cross_site_purchase_comparison.py
+skills/cross-site-purchase-comparison/scripts/compare_prices.py
 from skills/cross-site-purchase-comparison/examples/synthetic/.
 """
 import os
@@ -12,7 +12,7 @@ import pprint
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.join(HERE, "..", "skills", "cross-site-purchase-comparison")
 EX = os.path.join(SKILL, "examples", "synthetic")
-SCRIPT = os.path.join(SKILL, "scripts", "generate_cross_site_purchase_comparison.py")
+SCRIPT = os.path.join(SKILL, "scripts", "compare_prices.py")
 BEGIN, END = "# BEGIN DEMO DATA\n", "# END DEMO DATA\n"
 
 

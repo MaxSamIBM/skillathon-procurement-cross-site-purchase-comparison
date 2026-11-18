@@ -6,13 +6,24 @@ description: >
   price gaps as savings SCENARIOS with source rows behind every number. Anything uncertain goes to a
   person; nothing is guessed. Use before a supplier negotiation, sourcing review or cost workshop.
 type: workflow
+multi_turn: true
 allowed-tools:
   - run_skill_script
+  - list_temp_files
+  - read_temp_file
+  - write_temp_file
+  - save_output_file
+  - list_skill_files
+  - read_skill_file
+  - list_domains
+  - get_blueprint_markdown
+  - stage_blueprint_to_temp
+  - stage_artifact_to_temp
 metadata:
-  version: 0.3.0
+  version: 0.4.0
 ---
 
-# cross-site-purchase-comparison (v0.3.0)
+# cross-site-purchase-comparison (v0.4.0)
 
 **Business question:** *Are different parts of the client paying different prices for the same thing, and which differences are worth investigating?*
 
@@ -30,7 +41,7 @@ Do **not** use it to claim achieved savings, to compare across specifications no
 | Input | What it is | Changes per client? |
 |---|---|---|
 | Plant exports | One `.csv` per plant (header row anywhere in the first 30 rows; total rows allowed). Excel inputs must be exported to CSV before upload; `.xlsx` is not accepted. | Yes |
-| `scope.json` (or `scope_csv.json`) | Category, reporting currency, comparison window, and per plant a `file` name (bare `.csv` name, no folders) plus optional `date_format` | Yes |
+| Scope file (`scope.json` or `scope_csv.json`) | Category, reporting currency, comparison window, and per plant a `file` name (bare `.csv` name, no folders) plus optional `date_format` | Yes |
 | Rules pack | One `rules.json` with a section per table below, or a `rules/` folder holding the eight files | Yes |
 | ↳ `columns.json` | Which column headers mean which standard field | Add the client's header names |
 | ↳ `specs.csv`, `item_map.csv` | Approved specifications, and which plant item code or description is which specification | Yes (a buyer approves) |
@@ -45,25 +56,29 @@ The rules pack can be one `rules.json` with a section per table below (`columns`
 
 Templates and a worked example are in `examples/synthetic/`.
 
-## Deterministic entry point
+## How the script is run (Process Studio contract)
 
-The deterministic entry script is `scripts/generate_cross_site_purchase_comparison.py`. If no scope file is staged it runs the built-in demo (mode 1). It is self-contained, uses only Python's standard library, accepts CSV source files only, and runs without `run.py`, `ppc/`, third-party packages or arbitrary command-line flags. For the documented staged-file convention, the current working directory contains `scope.json` or `scope_csv.json`, the rules pack as a single `rules.json` (preferred, fewer files to upload) or a `rules/` folder, one decisions file (`decisions.json` or a single `decisions_*.json`), and the plant CSVs named in scope placed either directly in the working directory (flat) or inside an `inputs_csv/` folder; the script writes `out/run_report.json`, `out/opportunities.csv`, and `out/needs_review.csv`. This convention is a practical documentation example, not a claim about Process Studio's undocumented argument, staging, or return contract. Process Studio execution must be invoked from chat and must not rely on CLI flags.
+- The script is `scripts/compare_prices.py`, declared in `scripts/manifest.json`. Only declared scripts and arguments are admitted; call it with **`run_skill_script`**. The one optional argument is `--mode` with the value `auto`, `demo` or `run`. Declare nothing else: any other flag is rejected before the script starts.
+- It is deliberately **not** named `generate_*`, so it is never auto-run. You orchestrate it, and may call it several times in one turn (Gate 1, then DRAFT, then FINAL) with a person's decision in between.
+- The script runs with the run's temp folder as its working directory. **Files the user attached are already staged there**, named `uploaded_<original name>`, with `.txt` added to anything that is not `.md` or `.txt` (so `plant_A_purchases.csv` becomes `uploaded_plant_A_purchases.csv.txt`). The script understands those names. **Do not re-type or relay uploaded files with `write_temp_file`**: it is unreliable for anything you did not compose yourself.
+- The script prints one JSON result to stdout, and writes `out/run_report.json`, `out/opportunities.csv` and `out/needs_review.csv`. Quote its output; never paraphrase numbers.
+- Python standard library only. CSV input only.
 
 ## Choose the mode first
 
 | Situation | Mode | What runs |
 |---|---|---|
-| The user wants to **see the skill work**, or file staging is failing or unavailable | **1. Built-in demo** | The script, on embedded synthetic data. Nothing to stage. |
-| The user uploaded their own files **and staging works** | **2. Script run on their files** | The script, on the staged files (the flow below). |
-| The user uploaded files **but staging fails or is unavailable** | **3. Chat-only review** | The assistant reads the uploads as text. **No script runs.** |
+| The user wants to **see the skill work**, or has attached no files | **1. Built-in demo** | `run_skill_script` with `--mode demo`. Embedded synthetic data, nothing staged. |
+| The user attached scope, rules and plant CSVs | **2. Script run on their files** | `run_skill_script` with `--mode run`, after the steps below. |
+| The script cannot run at all (the platform blocks it) | **3. Chat-only review** | The assistant reads the uploads as text. **No script runs.** |
 
 Never silently drop from mode 2 to mode 3, and never present mode 3 results as script-verified.
 
 ## Mode 1: built-in demo (no files needed)
 
-Call `run_skill_script` for `scripts/generate_cross_site_purchase_comparison.py` **with no arguments and no staged files**. With no scope file present the script runs the embedded synthetic example through all three decision stages, entirely in memory, and prints one JSON result. It reads no uploads, writes no files, and needs no `write_temp_file`.
+Call `run_skill_script` for `scripts/compare_prices.py` with `--mode demo`. It runs the embedded synthetic example through all three decision stages in memory and prints one JSON result. It reads no uploads and writes no files.
 
-Present the result like this, quoting the script's own output and not paraphrasing numbers:
+Present the result like this, quoting the script's own output:
 1. **Stage 0, `STOPPED_AT_GATE_1`:** the run refuses to report savings until a person confirms the scope.
 2. **Stage 1, `DRAFT`:** Gate 1 is confirmed. Plant A pays $70.00 per 1,000 labels against Plant B's $60.00. The scenario is $20,000 on 2,000,000 labels. Plant D's abbreviated description is held in the Gate 2 queue because nobody has approved the match. Plant C's specification Y is never compared with X.
 3. **Stage 2, `FINAL`:** all three gates are signed off. Plant D's approved match adds a $2,112 scenario. All seven release checks show PASS.
@@ -72,20 +87,27 @@ State clearly: **this is synthetic data, the savings are scenarios to confirm wi
 
 ## Mode 2: running the script on the user's files
 
-### Chat-invoked flow and staged files
+Ask the user to attach: one CSV per plant, the scope file, and the rules as one `rules.json`. Excel users must export to CSV first. Do not ask for a decisions file; you write it with the person at the gates.
 
-When this skill is invoked from chat, ask the user to upload one CSV per plant, the scope file, the rules pack as one `rules.json`, and one decisions file. That is the plant CSVs plus three files, which keeps staging small. A `rules/` folder of eight files is also accepted. Excel users must export as CSV. Verify the plant, category, date window, currency, source files and mapping before asking the user to confirm Gate 1; invocation is not approval. If rules or decisions are missing, request them or explain that the workflow cannot safely proceed. Do not infer mappings, units, FX, or equivalence.
+Steps, in order:
+1. **Find the staged files.** Call `list_temp_files`. Expect `uploaded_scope*.json(.txt)`, `uploaded_rules.json(.txt)` and one `uploaded_*.csv.txt` per plant. If something is missing, tell the user which file and stop; do not invent it. If two uploads share one original name, ask the user to attach it once.
+2. **Gate 1 run.** Call `run_skill_script` with `--mode run` and no `decisions.json` present. Expect `STOPPED_AT_GATE_1`, with the open items listed (scope to confirm, column headers the skill does not recognise). Show them to the user.
+3. **Get Gate 1 from the person.** Ask them to confirm plants, category, window and reporting currency, and to map any unrecognised header. Then compose `decisions.json` yourself (a few lines, which is safe for `write_temp_file`) using the shape in `examples/synthetic/decisions_1_scope_confirmed.json`. Only write what the person actually said. Never confirm a gate for them.
+4. **DRAFT run.** Call `run_skill_script` with `--mode run` again. Show the opportunities, the Needs review list and the Gate 2 queue.
+5. **Gate 2.** Show each proposed match with its source row. The person approves or rejects each one. Update `decisions.json` with exactly their answers.
+6. **Gate 3 and FINAL run.** Only when the person explicitly signs off, add the sign-off to `decisions.json` and run once more. Without it the result stays a DRAFT.
+7. **Deliver.** Call `save_output_file` for `out/opportunities.csv`, `out/needs_review.csv` and `out/run_report.json`.
 
-Files should be staged flat in the working directory (or inside `inputs_csv/` if subdirectories are supported): `scope.json`, `rules.json` (or `rules/`), optional `decisions.json`, plus the plant CSVs (`plant_A_purchases.csv`, etc.). Scope names each file by bare file name only; the script inspects the working directory (or `inputs_csv/`) and opens only CSV files it finds there, so no path from user input reaches a file operation. Run `python3 /path/to/scripts/generate_cross_site_purchase_comparison.py` with that directory as the current working directory; it accepts no arbitrary flags. This staged-file example does not document or imply Process Studio's runtime argument contract. Python 3 standard library only; no package installation required. The script writes results under `out/` within the working directory.
+Pause for the person at every gate. Their reply arrives as the next message; that is what `multi_turn` is for. If a run returns `STOPPED_RECONCILIATION` or `ERROR`, show the exact message and stop.
 
-## Mode 3: chat-only review (fallback when staging fails)
+## Mode 3: chat-only review (fallback if the script is blocked)
 
-Use only when the user has uploaded files, staging has failed, and the user agrees to proceed. Say first, in plain words: **"No script ran. This is my reading of your files, not code-verified results."**
+Use only if `run_skill_script` is blocked for this skill and the user agrees to proceed. Say first, in plain words: **"No script ran. This is my reading of your files, not code-verified results."**
 
 - Read the uploaded scope, rules and plant CSVs as text, and follow the same flow, rules and gates as below. Obey the same limits: no cross-specification comparison unless the rules pack lists an approved equivalence; no unit, pack size or currency conversion without a rule; a cheaper price on different terms is not a benchmark; uncertain matches go to the person.
 - Show your working: for each finding, the source file, row, quantity, unit, price and the conversion rule used.
 - Label every figure **"model-calculated, not code-verified"**. Never say "reconciled", "release checks passed" or "FINAL". The most you may produce is a **DRAFT**.
-- Offer to re-run in mode 2 once staging works, and stop and ask the user at each gate; never confirm a gate for them.
+- Stop and ask the user at each gate; never confirm a gate for them.
 
 ## The flow  (code does everything except the three decisions)
 
@@ -114,7 +136,7 @@ Use only when the user has uploaded files, staging has failed, and the user agre
 ## Ready for another client
 Change only: the plant exports, `scope.json`, the rules pack (headers, specifications and item map, unit conversions, FX, bands) and `decisions.json`. No code changes. Replace the synthetic rules with the client's; never put client data in this folder.
 
-## Limits of v0.3.0 (be honest with the client)
+## Limits of v0.4.0 (be honest with the client)
 - One category (packaging labels), one price basis (per 1,000 labels), CSV input only. Excel files must be exported to CSV first.
 - Savings are scenarios. They don't confirm that a price is available at another plant's volume, location or terms. A buyer must confirm.
 - Column mapping uses exact aliases plus a person; there is no fuzzy header guessing.
@@ -125,4 +147,4 @@ Change only: the plant exports, `scope.json`, the rules pack (headers, specifica
 - Variance analysis itself isn't new (procurement suites offer it). What's new here is the comparability method for inconsistent exports and the guarantees above. **A search of existing Process Studio skills and public assets has not been done yet.**
 
 ## Files
-`SKILL.md` (chat-invoked workflow instructions) · `scripts/generate_cross_site_purchase_comparison.py` (self-contained standard-library entry point; contains the embedded synthetic demo) · `examples/synthetic/` (synthetic CSV plant files, rules pack, decision stages and expected results). The legacy local CLI and workbook code are not part of the Process Studio workflow path.
+`SKILL.md` (multi-turn workflow instructions) · `scripts/compare_prices.py` (self-contained standard-library engine; contains the embedded synthetic demo) · `scripts/manifest.json` (declares the script and its one argument) · `examples/synthetic/` (synthetic CSV plant files, rules pack, decision stages and expected results). The legacy local CLI and workbook code are not part of the Process Studio workflow path.

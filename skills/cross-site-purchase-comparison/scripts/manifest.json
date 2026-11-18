@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "compare_prices.py": {
+      "arguments": {
+        "--mode": {"type": "enum", "values": ["auto", "demo", "run"], "required": false}
+      }
+    }
+  }
+}

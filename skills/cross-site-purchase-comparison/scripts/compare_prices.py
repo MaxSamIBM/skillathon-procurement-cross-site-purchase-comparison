@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""CSV-first deterministic workflow entry point (Python standard library only).
+"""Cross-site purchase comparison: deterministic engine (Python standard library only).
 
-Staged-file convention: run with the staged package as cwd, containing scope.json,
- rules.json (or rules/), decisions.json, and the plant CSVs in inputs_csv/. Outputs go to
- cwd/out/. This convention is documented for users; it is not a claim about an
- undocumented Process Studio argument or return contract.
+Process Studio contract (from the platform team): the script runs with the run's temp
+ working directory as cwd. Parsed chat attachments are auto-staged there as
+ uploaded_<name>, with .txt appended to anything that isn't .md/.txt. This script
+ recognises those names as well as plain ones (scope.json, rules.json, decisions.json,
+ plant CSVs, optionally inside inputs_csv/). Outputs go to cwd/out/.
+ The name deliberately does not match generate_*: the agent orchestrates the gates.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ import sys
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 RULE_FILES = ("columns.json", "settings.json", "specs.csv", "item_map.csv",
               "spec_equivalences.csv", "abbreviations.csv", "unit_conversions.csv", "fx_rates.csv")
 RULES_FILE = "rules.json"
@@ -63,34 +65,74 @@ def _emit(path, text):
         f.write(text)
 
 
-def _input_listing(input_dir):
-    """(name, path) for each regular file in the input folder, sorted by name."""
+UPLOAD_PREFIX = "uploaded_"
+KNOWN_EXTS = (".csv", ".json")
+
+
+def _canonical(name):
+    """Map a platform-staged name to the name a user attached.
+
+    uploaded_plant_A.csv.txt -> plant_A.csv ; uploaded_rules.json.txt -> rules.json ;
+    plain names are returned unchanged. Only ever applied to names from a folder listing.
+    """
+    if name.startswith(UPLOAD_PREFIX):
+        name = name[len(UPLOAD_PREFIX):]
+    if name.lower().endswith(".txt") and name[:-4].lower().endswith(KNOWN_EXTS):
+        name = name[:-4]
+    return name
+
+
+def _raw_listing(folder):
+    """(entry_name, path) for each regular, non-symlink file directly in a folder."""
     if _VFS is not None:
-        prefix = input_dir + "/"
-        return sorted((k[len(prefix):], k) for k in _VFS if k.startswith(prefix))
-    with os.scandir(input_dir) as listing:
+        if folder == os.curdir:
+            return sorted((k, k) for k in _VFS if "/" not in k)
+        prefix = folder + "/"
+        return sorted((k[len(prefix):], k) for k in _VFS if k.startswith(prefix) and "/" not in k[len(prefix):])
+    with os.scandir(folder) as listing:
         return sorted((e.name, e.path) for e in listing if e.is_file(follow_symlinks=False))
 
 
+def _index(folder):
+    """canonical name -> path. A plain name beats an uploaded_ alias; two aliases for one name is an error."""
+    plain, alias = {}, {}
+    for entry_name, path in _raw_listing(folder):
+        canon = _canonical(entry_name)
+        target = plain if canon == entry_name else alias
+        if canon in target:
+            raise WorkflowError(f"Two staged files both look like '{canon}'; attach it only once")
+        target[canon] = path
+    merged = dict(alias)
+    merged.update(plain)
+    return merged
+
+
+def _input_listing(input_dir):
+    """(canonical name, path) for each staged file in the input folder, sorted by name."""
+    return sorted(_index(input_dir).items())
+
+
 def _find_scope():
+    found = _index(os.curdir)
     for name in SCOPE_NAMES:
-        if _regular(name):
-            return name
+        if name in found:
+            return found[name]
     raise WorkflowError("Required file not found: scope.json (or scope_csv.json)")
 
 
 def _find_decisions():
     """decisions.json, or the single decisions*.json present; none means no decisions yet."""
-    if _regular(DECISIONS_NAME):
-        return DECISIONS_NAME
-    found = []
-    with os.scandir(os.curdir) as listing:
-        for entry in listing:
-            if entry.is_file(follow_symlinks=False) and entry.name.startswith("decisions") and entry.name.endswith(".json"):
-                found.append(entry.name)
-    if len(found) > 1:
-        raise WorkflowError(f"More than one decisions file found {sorted(found)}; attach only the one for this stage")
-    return found[0] if found else None
+    found = _index(os.curdir)
+    if DECISIONS_NAME in found:
+        return found[DECISIONS_NAME]
+    matches = sorted(n for n in found if n.startswith("decisions") and n.endswith(".json"))
+    if len(matches) > 1:
+        raise WorkflowError(f"More than one decisions file found {matches}; attach or write only the one for this stage")
+    return found[matches[0]] if matches else None
+
+
+def _find_rules_file():
+    return _index(os.curdir).get(RULES_FILE)
 
 
 def _regular(path):
@@ -163,15 +205,16 @@ def _table_rows(rows, name, required):
 
 def _rules_source():
     """Rules come from one rules.json (preferred) or the eight files in rules/."""
-    if _regular(RULES_FILE):
-        pack = _json(RULES_FILE, RULES_FILE)
+    rules_path = _find_rules_file()
+    if rules_path:
+        pack = _json(rules_path, RULES_FILE)
         if not isinstance(pack, dict):
             raise WorkflowError("rules.json must be a JSON object")
         missing = [k for k in ("columns", "settings", *RULE_TABLES) if k not in pack]
         if missing:
             raise WorkflowError(f"rules.json missing section(s): {missing}")
         tables = {k: _table_rows(pack[k], k, req) for k, req in RULE_TABLES.items()}
-        return pack["columns"], pack["settings"], tables, {RULES_FILE: _hash(RULES_FILE)}
+        return pack["columns"], pack["settings"], tables, {RULES_FILE: _hash(rules_path)}
     if not os.path.isdir(RULES_DIR) or os.path.islink(RULES_DIR):
         raise WorkflowError(f"Rules not found: attach {RULES_FILE} (or a {RULES_DIR}/ folder)")
     paths = {n: os.path.join(RULES_DIR, n) for n in RULE_FILES}
@@ -276,8 +319,9 @@ def _amount(value):
         return "BAD"
 
 
-def _load_file(plant, path, rules, overrides, date_format):
-    result = {"plant": plant, "file": os.path.basename(path), "header_row": None, "mapping": {},
+def _load_file(plant, path, rules, overrides, date_format, label=None):
+    # label is the name the user attached; path may be the platform-staged alias.
+    result = {"plant": plant, "file": label or os.path.basename(path), "header_row": None, "mapping": {},
               "mapping_basis": {}, "unmapped": [], "missing": [], "unknown": [], "errors": [],
               "rows": [], "skipped": [], "reconciliation": {}}
     with _open_text(path, "utf-8-sig", newline="") as f:
@@ -664,7 +708,7 @@ def _run():
     files, resolved = [], []
     for _, item, path in matched:
         resolved.append(path)
-        files.append(_load_file(item["plant"], path, rules, overrides.get(item["plant"], {}), item.get("date_format")))
+        files.append(_load_file(item["plant"], path, rules, overrides.get(item["plant"], {}), item.get("date_format"), item["file"]))
     report = {"skill": "cross-site-purchase-comparison", "version": VERSION,
               "run_at": dt.datetime.now().isoformat(timespec="seconds"), "status": None,
               "inputs": {"files": [{"plant": x["plant"], "file": x["file"], "sha256": _hash(p)} for x, p in zip(files, resolved)],
@@ -1117,12 +1161,27 @@ def demo():
 
 
 def _has_staged_scope():
-    return any(_regular(name) for name in SCOPE_NAMES)
+    found = _index(os.curdir)
+    return any(name in found for name in SCOPE_NAMES)
+
+
+def _parse_mode():
+    """Optional --mode {auto,demo,run}; declared in scripts/manifest.json. Never used as a path."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Cross-site purchase comparison")
+    parser.add_argument("--mode", choices=("auto", "demo", "run"), default="auto")
+    return parser.parse_args().mode
 
 
 def main():
-    # No staged scope file in the working folder -> run the built-in synthetic demo (no staging needed).
-    if not _has_staged_scope():
+    mode = _parse_mode()
+    try:
+        use_demo = mode == "demo" or (mode == "auto" and not _has_staged_scope())
+    except WorkflowError as e:
+        print(json.dumps({"status": "ERROR", "error": str(e)}, indent=2))
+        return 1
+    # demo: embedded synthetic data, in memory. run: staged files. auto: run if a scope file is staged, else demo.
+    if use_demo:
         result = demo()
         print(json.dumps(_plain(result), indent=2, ensure_ascii=False))
         return 0 if result["result"] == "PASS" else 1
