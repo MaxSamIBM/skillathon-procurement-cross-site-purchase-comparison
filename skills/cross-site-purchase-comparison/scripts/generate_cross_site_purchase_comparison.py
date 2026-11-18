@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import hashlib
+import io
 import json
 import os
 import re
@@ -18,7 +19,7 @@ import sys
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-VERSION = "0.2.2"
+VERSION = "0.3.0"
 RULE_FILES = ("columns.json", "settings.json", "specs.csv", "item_map.csv",
               "spec_equivalences.csv", "abbreviations.csv", "unit_conversions.csv", "fx_rates.csv")
 RULES_FILE = "rules.json"
@@ -40,6 +41,35 @@ DECISIONS_NAME = "decisions.json"
 RULES_DIR = "rules"
 INPUT_DIR = "inputs_csv"
 OUT_DIR = "out"
+
+
+# In-memory mode (used only by the built-in demo): _VFS maps names to text, _OUT collects outputs.
+_VFS = None
+_OUT = None
+
+
+def _open_text(path, encoding="utf-8", newline=None):
+    if _VFS is not None:
+        return io.StringIO(_VFS[path], newline=newline)
+    return open(path, newline=newline, encoding=encoding)
+
+
+def _emit(path, text):
+    """Write an output file, or keep it in memory during the built-in demo."""
+    if _VFS is not None:
+        _OUT[os.path.basename(path)] = text
+        return
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        f.write(text)
+
+
+def _input_listing(input_dir):
+    """(name, path) for each regular file in the input folder, sorted by name."""
+    if _VFS is not None:
+        prefix = input_dir + "/"
+        return sorted((k[len(prefix):], k) for k in _VFS if k.startswith(prefix))
+    with os.scandir(input_dir) as listing:
+        return sorted((e.name, e.path) for e in listing if e.is_file(follow_symlinks=False))
 
 
 def _find_scope():
@@ -65,11 +95,16 @@ def _find_decisions():
 
 def _regular(path):
     """True for an existing regular file that is not a symlink."""
+    if _VFS is not None:
+        return path in _VFS
     return os.path.isfile(path) and not os.path.islink(path)
 
 
 def _hash(path):
     h = hashlib.sha256()
+    if _VFS is not None:
+        h.update(_VFS[path].encode("utf-8"))
+        return h.hexdigest()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
@@ -93,14 +128,14 @@ def _decimal(v, what):
 
 def _json(path, what):
     try:
-        with open(path, encoding="utf-8") as f:
+        with _open_text(path) as f:
             return json.load(f)
     except (OSError, ValueError) as e:
         raise WorkflowError(f"{what} is not readable valid JSON: {e}")
 
 
 def _read_csv(path, required=()):
-    with open(path, newline="", encoding="utf-8-sig") as f:
+    with _open_text(path, "utf-8-sig", newline="") as f:
         rd = csv.DictReader(f)
         missing = [c for c in required if c not in (rd.fieldnames or [])]
         if missing:
@@ -245,7 +280,7 @@ def _load_file(plant, path, rules, overrides, date_format):
     result = {"plant": plant, "file": os.path.basename(path), "header_row": None, "mapping": {},
               "mapping_basis": {}, "unmapped": [], "missing": [], "unknown": [], "errors": [],
               "rows": [], "skipped": [], "reconciliation": {}}
-    with open(path, newline="", encoding="utf-8-sig") as f:
+    with _open_text(path, "utf-8-sig", newline="") as f:
         source = list(csv.reader(f))
     width = max((len(row) for row in source), default=0)
     source = [row + [""] * (width - len(row)) for row in source]
@@ -559,12 +594,13 @@ def _plain(value):
 
 
 def _write_csv(path, headers, rows):
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=headers, extrasaction="ignore")
-        if headers:
-            writer.writeheader()
-        for row in rows:
-            writer.writerow({k: _plain(v) for k, v in row.items()})
+    buf = io.StringIO(newline="")
+    writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+    if headers:
+        writer.writeheader()
+    for row in rows:
+        writer.writerow({k: _plain(v) for k, v in row.items()})
+    _emit(path, buf.getvalue())
 
 
 def _produce(out_dir, report, lines, opportunities, queue, g1):
@@ -588,16 +624,17 @@ def _produce(out_dir, report, lines, opportunities, queue, g1):
     for item in report.get("gate1_open", []):
         review.append({"type": "Gate 1", "plant": "", "source": "", "description": "", "reason": item, "next_action": "Confirm scope and mappings in decisions.json"})
     _write_csv(os.path.join(out_dir, "needs_review.csv"), ["type", "plant", "source", "description", "reason", "next_action"], review)
-    with open(os.path.join(out_dir, "run_report.json"), "w", encoding="utf-8") as f:
-        json.dump(_plain(report), f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    _emit(os.path.join(out_dir, "run_report.json"), json.dumps(_plain(report), indent=2, ensure_ascii=False) + "\n")
 
 
 def _run():
     scope_name = _find_scope()
     decisions_name = _find_decisions()
-    input_dir = INPUT_DIR if (os.path.isdir(INPUT_DIR) and not os.path.islink(INPUT_DIR)) else os.curdir
-    os.makedirs(OUT_DIR, exist_ok=True)
+    if _VFS is not None:
+        input_dir = INPUT_DIR
+    else:
+        input_dir = INPUT_DIR if (os.path.isdir(INPUT_DIR) and not os.path.islink(INPUT_DIR)) else os.curdir
+        os.makedirs(OUT_DIR, exist_ok=True)
     scope = _json(scope_name, "scope")
     decisions = _json(decisions_name, "decisions") if decisions_name else {}
     for key in ("reporting_currency", "window", "files"):
@@ -613,12 +650,10 @@ def _run():
     # Scope names are only ever compared with the folder listing; the files that get opened
     # are the listing's own entries, so scope text never becomes part of a path.
     matched = []
-    with os.scandir(input_dir) as listing:
-        for entry in sorted(listing, key=lambda e: e.name):
-            if entry.is_file(follow_symlinks=False):
-                for position, item in enumerate(scope["files"]):
-                    if entry.name == item["file"]:
-                        matched.append((position, item, entry.path))
+    for entry_name, entry_path in _input_listing(input_dir):
+        for position, item in enumerate(scope["files"]):
+            if entry_name == item["file"]:
+                matched.append((position, item, entry_path))
     matched.sort(key=lambda m: m[0])
     if len(matched) != len(scope["files"]):
         found = {m[1]["file"] for m in matched}
@@ -686,7 +721,411 @@ def generate():
         return {"status": "ERROR", "error": str(exc)}
 
 
+# BEGIN DEMO DATA
+# Generated by tools/embed_demo.py from examples/synthetic/. Synthetic data only; edit the examples, then re-run the tool.
+DEMO_COMMON = {'inputs_csv/plant_A_purchases.csv': 'PO Date,Material,Material Description,Order Qty,UoM,Net '
+                                     'Price,Curr,Vendor,Incoterm,Net Value\r\n'
+                                     '2025-09-15,A-1001,"Product label, white, specification '
+                                     'X",500,ROLL-500,35,USD,Vendor 1,DAP,17500\r\n'
+                                     '2025-12-05,A-1001,"Product label, white, specification '
+                                     'X",1000,ROLL-500,35,USD,Vendor 1,DAP,35000\r\n'
+                                     '2026-03-04,A-1001,"Product label, white, specification '
+                                     'X",1000,ROLL-500,35,USD,Vendor 1,DAP,35000\r\n'
+                                     '2026-06-10,A-1001,"Product label, white, specification '
+                                     'X",1000,ROLL-500,35,USD,Vendor 1,DAP,35000\r\n'
+                                     '2026-09-09,A-1001,"Product label, white, specification '
+                                     'X",1000,ROLL-500,35,USD,Vendor 1,DAP,35000\r\n'
+                                     'Total,,,,,,,,,157500\r\n',
+ 'inputs_csv/plant_B_export.csv': 'Date,Item No,Item Text,Quantity,Unit,Unit Price,Currency,Supplier '
+                                  'Name,Delivery Terms,Line Total\r\n'
+                                  '2025-11-20,880021,"White label, specification '
+                                  'X",500,ROLL-1000,60,USD,Vendor 2,DAP,30000\r\n'
+                                  '2026-01-12,880021,"White label, specification X",,ROLL-1000,60,USD,Vendor '
+                                  '2,DAP,\r\n'
+                                  '2026-02-18,880021,"White label, specification '
+                                  'X",500,ROLL-1000,60,USD,Vendor 2,DAP,30000\r\n'
+                                  '2026-04-01,880021,"White label, specification '
+                                  'X",10,ROLL-1000,75,USD,Vendor 2,DAP,750\r\n'
+                                  '2026-05-20,880021,"White label, specification '
+                                  'X",500,ROLL-1000,60,USD,Vendor 2,DAP,30000\r\n'
+                                  '2026-07-07,880021,"White label, specification '
+                                  'X",300,ROLL-1000,52,USD,Vendor 2,EXW,15600\r\n'
+                                  '2026-08-19,880021,"White label, specification '
+                                  'X",500,ROLL-1000,60,USD,Vendor 2,DAP,30000\r\n'
+                                  'Grand Total,,,,,,,,,136350\r\n',
+ 'inputs_csv/plant_C_report.csv': 'Plant C - Packaging purchases,,,,,,,,,\r\n'
+                                  'Exported 2026-11-02,,,,,,,,,\r\n'
+                                  ',,,,,,,,,\r\n'
+                                  'Posting Date,Mat Code,Mat '
+                                  'Desc,Qty,OUn,Price,Crcy,Vendor,Inco-terms,Value\r\n'
+                                  '2026-01-15,C-77,"Label, specification Y",800,RL (500),40,USD,Vendor '
+                                  '3,DAP,32000\r\n'
+                                  '2026-05-05,C-77,"Label, specification Y",100,ROLL,41,USD,Vendor '
+                                  '3,DAP,4100\r\n'
+                                  'Subtotal H1,,,,,,,,,36100\r\n'
+                                  '2026-07-15,C-77,"Label, specification Y",800,RL (500),40,USD,Vendor '
+                                  '3,DAP,32000\r\n'
+                                  'Total,,,,,,,,,68100\r\n',
+ 'inputs_csv/plant_D_extract.csv': 'Doc Date,Material,Short Text,Order Qty (M),OUn,Price per '
+                                   'M,Cur.,Supplier,IncoT,Net Value\r\n'
+                                   '15.01.2026,,Lbl wht spec X,400,M,58,EUR,Supplier 4,DAP,23200\r\n'
+                                   '03.03.2026,,Etikett weiss,100,M,50,EUR,Supplier 4,DAP,5000\r\n'
+                                   '20.06.2026,,Lbl wht spec X,400,M,58,EUR,Supplier 4,DAP,23200\r\n'
+                                   'Total,,,,,,,,,51400\r\n',
+ 'rules.json': '{\n'
+               '  "_doc": "Single-file rules pack: the eight rules/ files combined. Attach this instead of '
+               'the rules/ folder.",\n'
+               '  "columns": {\n'
+               '    "_doc": "Maps each plant\'s column headers to the standard fields. Headers are compared '
+               'after lower-casing and replacing punctuation with spaces. Exact match only. Anything not '
+               'listed must be mapped by a person in decisions.json > column_overrides at Gate 1. Header '
+               'aliases do not define purchase-unit meaning; unit conversions are determined only by '
+               'unit_conversions.csv.",\n'
+               '    "required": [\n'
+               '      "date",\n'
+               '      "description",\n'
+               '      "quantity",\n'
+               '      "purchase_unit",\n'
+               '      "unit_price",\n'
+               '      "currency"\n'
+               '    ],\n'
+               '    "optional": [\n'
+               '      "item_code",\n'
+               '      "supplier",\n'
+               '      "freight_terms",\n'
+               '      "line_amount"\n'
+               '    ],\n'
+               '    "aliases": {\n'
+               '      "date": [\n'
+               '        "po date",\n'
+               '        "date",\n'
+               '        "posting date",\n'
+               '        "order date",\n'
+               '        "doc date"\n'
+               '      ],\n'
+               '      "item_code": [\n'
+               '        "material",\n'
+               '        "item no",\n'
+               '        "mat code",\n'
+               '        "item code",\n'
+               '        "material number",\n'
+               '        "mat no"\n'
+               '      ],\n'
+               '      "description": [\n'
+               '        "material description",\n'
+               '        "item text",\n'
+               '        "mat desc",\n'
+               '        "description",\n'
+               '        "short text",\n'
+               '        "item description"\n'
+               '      ],\n'
+               '      "quantity": [\n'
+               '        "order qty",\n'
+               '        "order qty m",\n'
+               '        "quantity",\n'
+               '        "qty",\n'
+               '        "po quantity"\n'
+               '      ],\n'
+               '      "purchase_unit": [\n'
+               '        "uom",\n'
+               '        "unit",\n'
+               '        "oun",\n'
+               '        "order unit",\n'
+               '        "purchase unit"\n'
+               '      ],\n'
+               '      "unit_price": [\n'
+               '        "net price",\n'
+               '        "unit price",\n'
+               '        "price",\n'
+               '        "price per m"\n'
+               '      ],\n'
+               '      "currency": [\n'
+               '        "curr",\n'
+               '        "currency",\n'
+               '        "crcy",\n'
+               '        "cur"\n'
+               '      ],\n'
+               '      "supplier": [\n'
+               '        "vendor",\n'
+               '        "supplier name",\n'
+               '        "supplier",\n'
+               '        "vendor name"\n'
+               '      ],\n'
+               '      "freight_terms": [\n'
+               '        "incoterm",\n'
+               '        "delivery terms",\n'
+               '        "inco terms",\n'
+               '        "incoterms",\n'
+               '        "incot"\n'
+               '      ],\n'
+               '      "line_amount": [\n'
+               '        "net value",\n'
+               '        "line total",\n'
+               '        "value",\n'
+               '        "amount"\n'
+               '      ]\n'
+               '    }\n'
+               '  },\n'
+               '  "settings": {\n'
+               '    "_doc": "Comparison conditions. Purchases are compared only inside the same cell of '
+               '(specification, order-size band, freight class). Bands use labels per order line.",\n'
+               '    "price_basis_labels": 1000,\n'
+               '    "matching": {\n'
+               '      "propose_threshold": 0.6\n'
+               '    },\n'
+               '    "volume_bands": [\n'
+               '      {\n'
+               '        "name": "small",\n'
+               '        "below_labels_per_order": 100000\n'
+               '      },\n'
+               '      {\n'
+               '        "name": "standard",\n'
+               '        "below_labels_per_order": null\n'
+               '      }\n'
+               '    ],\n'
+               '    "freight_groups": {\n'
+               '      "DAP": "delivered",\n'
+               '      "DDP": "delivered",\n'
+               '      "CPT": "delivered",\n'
+               '      "CIP": "delivered",\n'
+               '      "EXW": "ex-works",\n'
+               '      "FCA": "ex-works",\n'
+               '      "FOB": "ex-works"\n'
+               '    },\n'
+               '    "min_plants_per_group": 2,\n'
+               '    "amount_tolerance": 0.01\n'
+               '  },\n'
+               '  "specs": [\n'
+               '    {\n'
+               '      "spec_id": "SPEC-X",\n'
+               '      "spec_name": "White label, specification X"\n'
+               '    },\n'
+               '    {\n'
+               '      "spec_id": "SPEC-Y",\n'
+               '      "spec_name": "Label, specification Y"\n'
+               '    }\n'
+               '  ],\n'
+               '  "item_map": [\n'
+               '    {\n'
+               '      "plant": "Plant A",\n'
+               '      "item_code": "A-1001",\n'
+               '      "description": "Product label, white, specification X",\n'
+               '      "spec_id": "SPEC-X",\n'
+               '      "status": "approved",\n'
+               '      "approved_by": "Category buyer (role)"\n'
+               '    },\n'
+               '    {\n'
+               '      "plant": "Plant B",\n'
+               '      "item_code": "880021",\n'
+               '      "description": "White label, specification X",\n'
+               '      "spec_id": "SPEC-X",\n'
+               '      "status": "approved",\n'
+               '      "approved_by": "Category buyer (role)"\n'
+               '    },\n'
+               '    {\n'
+               '      "plant": "Plant C",\n'
+               '      "item_code": "C-77",\n'
+               '      "description": "Label, specification Y",\n'
+               '      "spec_id": "SPEC-Y",\n'
+               '      "status": "approved",\n'
+               '      "approved_by": "Category buyer (role)"\n'
+               '    }\n'
+               '  ],\n'
+               '  "spec_equivalences": [],\n'
+               '  "abbreviations": [\n'
+               '    {\n'
+               '      "short": "lbl",\n'
+               '      "long": "label"\n'
+               '    },\n'
+               '    {\n'
+               '      "short": "wht",\n'
+               '      "long": "white"\n'
+               '    },\n'
+               '    {\n'
+               '      "short": "spec",\n'
+               '      "long": "specification"\n'
+               '    },\n'
+               '    {\n'
+               '      "short": "blk",\n'
+               '      "long": "black"\n'
+               '    },\n'
+               '    {\n'
+               '      "short": "clr",\n'
+               '      "long": "clear"\n'
+               '    }\n'
+               '  ],\n'
+               '  "unit_conversions": [\n'
+               '    {\n'
+               '      "rule_id": "UC-001",\n'
+               '      "unit_alias": "ROLL-500",\n'
+               '      "plant": "*",\n'
+               '      "labels_per_unit": "500",\n'
+               '      "note": "Roll of 500 labels"\n'
+               '    },\n'
+               '    {\n'
+               '      "rule_id": "UC-002",\n'
+               '      "unit_alias": "ROLL-1000",\n'
+               '      "plant": "*",\n'
+               '      "labels_per_unit": "1000",\n'
+               '      "note": "Roll of 1000 labels"\n'
+               '    },\n'
+               '    {\n'
+               '      "rule_id": "UC-003",\n'
+               '      "unit_alias": "RL (500)",\n'
+               '      "plant": "Plant C",\n'
+               '      "labels_per_unit": "500",\n'
+               '      "note": "Plant C writes the roll size in brackets"\n'
+               '    },\n'
+               '    {\n'
+               '      "rule_id": "UC-004",\n'
+               '      "unit_alias": "M",\n'
+               '      "plant": "*",\n'
+               '      "labels_per_unit": "1000",\n'
+               '      "note": "M = one thousand labels; quantity and price are both per thousand"\n'
+               '    }\n'
+               '  ],\n'
+               '  "fx_rates": [\n'
+               '    {\n'
+               '      "rule_id": "FX-001",\n'
+               '      "currency": "EUR",\n'
+               '      "rate_to_reporting": "1.08",\n'
+               '      "reporting_currency": "USD",\n'
+               '      "as_of": "2026-10-31",\n'
+               '      "source_note": "Illustrative synthetic rate - replace with the client\'s approved '
+               'rate"\n'
+               '    }\n'
+               '  ]\n'
+               '}\n',
+ 'scope_csv.json': '{\n'
+                   '  "project": "SYNTHETIC-DEMO (no client data)",\n'
+                   '  "category": "packaging-labels",\n'
+                   '  "reporting_currency": "USD",\n'
+                   '  "window": {\n'
+                   '    "start": "2025-11-01",\n'
+                   '    "end": "2026-10-31"\n'
+                   '  },\n'
+                   '  "files": [\n'
+                   '    {\n'
+                   '      "plant": "Plant A",\n'
+                   '      "file": "plant_A_purchases.csv"\n'
+                   '    },\n'
+                   '    {\n'
+                   '      "plant": "Plant B",\n'
+                   '      "file": "plant_B_export.csv"\n'
+                   '    },\n'
+                   '    {\n'
+                   '      "plant": "Plant C",\n'
+                   '      "file": "plant_C_report.csv"\n'
+                   '    },\n'
+                   '    {\n'
+                   '      "plant": "Plant D",\n'
+                   '      "file": "plant_D_extract.csv",\n'
+                   '      "date_format": "%d.%m.%Y"\n'
+                   '    }\n'
+                   '  ]\n'
+                   '}'}
+DEMO_DECISIONS = {'0_start': '{\n'
+            '  "_doc": "SYNTHETIC. Nothing decided yet. The first run stops at Gate 1 and lists what needs '
+            'confirming."\n'
+            '}\n',
+ '1_scope_confirmed': '{\n'
+                      '  "_doc": "SYNTHETIC. Gate 1 done: scope confirmed and Plant D\'s two unknown headers '
+                      'mapped by a person. Gate 2 (uncertain matches) and Gate 3 (sign-off) still open, so '
+                      'the run produces a DRAFT.",\n'
+                      '  "gate1": { "confirmed": true, "by": "Procurement consultant (role)" },\n'
+                      '  "column_overrides": {\n'
+                      '    "Plant D": { "Order Qty (M)": "quantity", "Price per M": "unit_price" }\n'
+                      '  }\n'
+                      '}\n',
+ '2_signed_off': '{\n'
+                 '  "_doc": "SYNTHETIC. Gates 1-3 done. The category buyer approved Plant D\'s abbreviated '
+                 'description as specification X. The procurement lead signed off.",\n'
+                 '  "gate1": { "confirmed": true, "by": "Procurement consultant (role)" },\n'
+                 '  "column_overrides": {\n'
+                 '    "Plant D": { "Order Qty (M)": "quantity", "Price per M": "unit_price" }\n'
+                 '  },\n'
+                 '  "match_decisions": [\n'
+                 '    {\n'
+                 '      "plant": "Plant D",\n'
+                 '      "description": "Lbl wht spec X",\n'
+                 '      "decision": "approve",\n'
+                 '      "spec_id": "SPEC-X",\n'
+                 '      "by": "Category buyer (role)",\n'
+                 '      "reason": "Confirmed with the plant buyer: same white label, specification X"\n'
+                 '    }\n'
+                 '  ],\n'
+                 '  "gate3": { "approved": true, "by": "Procurement lead (role)" }\n'
+                 '}\n'}
+# END DEMO DATA
+
+DEMO_STAGES = (("0_start", "STOPPED_AT_GATE_1"), ("1_scope_confirmed", "DRAFT"), ("2_signed_off", "FINAL"))
+
+
+def _demo_stage(stage):
+    """Run one decision stage on the embedded synthetic data, entirely in memory (no file reads or writes)."""
+    global _VFS, _OUT
+    _VFS = dict(DEMO_COMMON)
+    _VFS["decisions.json"] = DEMO_DECISIONS[stage]
+    _OUT = {}
+    try:
+        report = generate()
+        return report, dict(_OUT)
+    finally:
+        _VFS, _OUT = None, None
+
+
+def _summary(report):
+    keep = {"status": report.get("status")}
+    if report.get("gate1_open"):
+        keep["gate1_open"] = report["gate1_open"]
+    if "counts" in report:
+        keep["counts"] = report["counts"]
+    if report.get("gates"):
+        keep["gates"] = report["gates"]
+    if report.get("release_checks"):
+        keep["release_checks"] = [f"{c.get('id')} {c.get('result')}: {c.get('check')}" for c in report["release_checks"]]
+    if report.get("gate2_queue"):
+        keep["gate2_queue"] = [f"{q['plant']}: '{q['description']}' -> {q['proposed_spec']} ({q['status']})" for q in report["gate2_queue"]]
+    if report.get("opportunities"):
+        keep["opportunities"] = [
+            {k: _plain(o.get(k)) for k in ("rank", "plant", "spec_id", "price_per_1000", "benchmark_plant",
+                                          "benchmark_price_per_1000", "labels", "scenario_saving", "rows", "benchmark_rows")}
+            for o in report["opportunities"]]
+    if report.get("error"):
+        keep["error"] = report["error"]
+    return keep
+
+
+def demo():
+    """Built-in synthetic demo: runs all three gate stages in memory and checks each against its expected status."""
+    stages, ok = [], True
+    for stage, expected in DEMO_STAGES:
+        report, outputs = _demo_stage(stage)
+        passed = report.get("status") == expected
+        ok = ok and passed
+        entry = {"stage": stage, "expected_status": expected, "check": "PASS" if passed else "FAIL"}
+        entry.update(_summary(report))
+        if stage == DEMO_STAGES[-1][0]:
+            entry["opportunities_csv"] = outputs.get("opportunities.csv", "")
+            entry["needs_review_csv"] = outputs.get("needs_review.csv", "")
+        stages.append(entry)
+    return {"skill": "cross-site-purchase-comparison", "version": VERSION, "mode": "BUILT_IN_DEMO",
+            "data": "SYNTHETIC ONLY - embedded copy of examples/synthetic; no files were read or written",
+            "result": "PASS" if ok else "FAIL",
+            "note": "Savings are illustrative scenarios on synthetic data, not client results.",
+            "stages": stages}
+
+
+def _has_staged_scope():
+    return any(_regular(name) for name in SCOPE_NAMES)
+
+
 def main():
+    # No staged scope file in the working folder -> run the built-in synthetic demo (no staging needed).
+    if not _has_staged_scope():
+        result = demo()
+        print(json.dumps(_plain(result), indent=2, ensure_ascii=False))
+        return 0 if result["result"] == "PASS" else 1
     result = generate()
     print(json.dumps(_plain(result), indent=2, ensure_ascii=False))
     return 0 if result.get("status") in ("FINAL", "DRAFT", "STOPPED_AT_GATE_1", "STOPPED_RECONCILIATION") else 1

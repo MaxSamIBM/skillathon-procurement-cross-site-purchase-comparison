@@ -165,3 +165,65 @@ class TestCsvGenerate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuiltInDemoTests(unittest.TestCase):
+    """The built-in demo must run with no staged files, write nothing, and match the file-based run."""
+
+    def _demo_in_empty_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with _in_dir(tmp):
+                mod = _load()
+                result = mod.demo()
+                leftovers = os.listdir(tmp)
+        return result, leftovers
+
+    def test_demo_passes_all_three_stages_and_writes_nothing(self):
+        result, leftovers = self._demo_in_empty_dir()
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual([s["status"] for s in result["stages"]], ["STOPPED_AT_GATE_1", "DRAFT", "FINAL"])
+        self.assertEqual(leftovers, [])
+
+    def test_demo_figures(self):
+        result, _ = self._demo_in_empty_dir()
+        final = result["stages"][-1]
+        savings = {o["plant"]: o["scenario_saving"] for o in final["opportunities"]}
+        self.assertEqual(savings, {"Plant A": "20000.00", "Plant D": "2112.00"})
+        self.assertTrue(all("PASS" in c for c in final["release_checks"]))
+        draft = result["stages"][1]
+        self.assertEqual([o["plant"] for o in draft["opportunities"]], ["Plant A"])
+
+    def test_demo_csv_matches_file_based_run(self):
+        result, _ = self._demo_in_empty_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "inputs_csv"))
+            for name in ("scope_csv.json", "rules.json", "decisions_2_signed_off.json"):
+                shutil.copy(os.path.join(EX, name), tmp)
+            for name in os.listdir(os.path.join(EX, "inputs_csv")):
+                shutil.copy(os.path.join(EX, "inputs_csv", name), os.path.join(tmp, "inputs_csv"))
+            with _in_dir(tmp):
+                _load().generate()
+            with open(os.path.join(tmp, "out", "opportunities.csv"), newline="", encoding="utf-8") as f:
+                on_disk = f.read()
+        self.assertEqual(result["stages"][-1]["opportunities_csv"], on_disk)
+
+    def test_main_runs_demo_when_nothing_staged_and_real_run_when_staged(self):
+        import contextlib
+        import io as _io
+        with tempfile.TemporaryDirectory() as tmp:
+            with _in_dir(tmp):
+                buf = _io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = _load().main()
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(buf.getvalue())["mode"], "BUILT_IN_DEMO")
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("scope_csv.json", "rules.json", "decisions_0_start.json"):
+                shutil.copy(os.path.join(EX, name), tmp)
+            for name in os.listdir(os.path.join(EX, "inputs_csv")):
+                shutil.copy(os.path.join(EX, "inputs_csv", name), tmp)
+            with _in_dir(tmp):
+                buf = _io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    _load().main()
+        self.assertEqual(json.loads(buf.getvalue())["status"], "STOPPED_AT_GATE_1")

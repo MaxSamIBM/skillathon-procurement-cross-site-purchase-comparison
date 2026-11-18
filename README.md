@@ -1,4 +1,4 @@
-# cross-site-purchase-comparison (v0.2.2)
+# cross-site-purchase-comparison (v0.3.0)
 
 CSV-first workflow to compare prices for the same approved packaging specifications across plants. It preserves source reconciliation, explicit rules, approved-equivalence controls and human gates. Results are scenarios for buyer review, not achieved or guaranteed savings.
 
@@ -33,7 +33,9 @@ working-dir/
   inputs_csv/           # CSVs at paths referenced in scope.json
 ```
 
-Run with that directory as current working directory:
+**Built-in demo (no files):** run the script from an empty folder. With no scope file present it runs the embedded synthetic example through all three gate stages in memory and prints one JSON result. It writes nothing. This is the mode to use in Process Studio while file staging isn't working. After editing anything in `examples/synthetic/`, re-run `python3 tools/embed_demo.py` so the embedded copy matches.
+
+**Your own files:** Run with that directory as current working directory:
 
 ```
 python3 /path/to/skills/cross-site-purchase-comparison/scripts/generate_cross_site_purchase_comparison.py
@@ -50,7 +52,7 @@ No flags or package installation are required. All scope-relative input paths an
 From the repository root:
 
 ```
-python3 -m unittest skills.cross-site-purchase-comparison.tests.test_csv_generate -v
+python3 -m unittest discover -s dev/skill-tests -v
 ```
 
 Synthetic fixtures only; no client data is included. The older local CLI/workbook implementation is retained only for legacy tests/examples and is not used by the Process Studio entry point.
