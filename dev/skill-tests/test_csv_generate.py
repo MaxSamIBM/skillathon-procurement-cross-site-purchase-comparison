@@ -114,7 +114,7 @@ class TestCsvGenerate(unittest.TestCase):
             spec.loader.exec_module(module)
             result = module.generate()
         self.assertEqual(result["status"], "ERROR")
-        self.assertIn("not found in inputs_csv", result["error"].lower())
+        self.assertIn("bare .csv file name", result["error"].lower())
 
 
     def test_single_rules_json_gives_same_results_as_rules_folder(self):
@@ -150,6 +150,18 @@ class TestCsvGenerate(unittest.TestCase):
                 report = _load().generate()
             self.assertNotIn(report.get("status"), ("STOPPED_AT_GATE_1", "DRAFT", "FINAL"))
             self.assertIn("missing section", json.dumps(report))
+
+    def test_flat_staging_without_inputs_csv_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy(os.path.join(EX, "scope_csv.json"), os.path.join(tmp, "scope.json"))
+            shutil.copy(os.path.join(EX, "rules.json"), os.path.join(tmp, "rules.json"))
+            shutil.copy(os.path.join(EX, "decisions_2_signed_off.json"), os.path.join(tmp, "decisions.json"))
+            for name in os.listdir(os.path.join(EX, "inputs_csv")):
+                shutil.copy(os.path.join(EX, "inputs_csv", name), os.path.join(tmp, name))
+            with _in_dir(tmp):
+                report = _load().generate()
+            self.assertEqual(report["status"], "FINAL")
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "out", "opportunities.csv")))
 
 if __name__ == "__main__":
     unittest.main()

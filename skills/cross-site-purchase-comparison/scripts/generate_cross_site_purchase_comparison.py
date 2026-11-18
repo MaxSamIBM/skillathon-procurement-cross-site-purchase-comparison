@@ -596,8 +596,7 @@ def _produce(out_dir, report, lines, opportunities, queue, g1):
 def _run():
     scope_name = _find_scope()
     decisions_name = _find_decisions()
-    if not os.path.isdir(INPUT_DIR) or os.path.islink(INPUT_DIR):
-        raise WorkflowError(f"Required folder not found: {INPUT_DIR}/")
+    input_dir = INPUT_DIR if (os.path.isdir(INPUT_DIR) and not os.path.islink(INPUT_DIR)) else os.curdir
     os.makedirs(OUT_DIR, exist_ok=True)
     scope = _json(scope_name, "scope")
     decisions = _json(decisions_name, "decisions") if decisions_name else {}
@@ -608,13 +607,13 @@ def _run():
     if start > end: raise WorkflowError("Comparison window starts after it ends")
     for item in scope["files"]:
         name = item.get("file")
-        if not isinstance(name, str) or not name.lower().endswith(".csv"):
-            raise WorkflowError(f"Scope entry for {item.get('plant')!r} must give 'file' as a .csv file name in {INPUT_DIR}/")
+        if not isinstance(name, str) or not name.lower().endswith(".csv") or os.path.basename(name) != name:
+            raise WorkflowError(f"Scope entry for {item.get('plant')!r} must give 'file' as a bare .csv file name")
     rules = _load_rules()
     # Scope names are only ever compared with the folder listing; the files that get opened
     # are the listing's own entries, so scope text never becomes part of a path.
     matched = []
-    with os.scandir(INPUT_DIR) as listing:
+    with os.scandir(input_dir) as listing:
         for entry in sorted(listing, key=lambda e: e.name):
             if entry.is_file(follow_symlinks=False):
                 for position, item in enumerate(scope["files"]):
@@ -624,7 +623,8 @@ def _run():
     if len(matched) != len(scope["files"]):
         found = {m[1]["file"] for m in matched}
         absent = [i["file"] for i in scope["files"] if i["file"] not in found]
-        raise WorkflowError(f"CSV file(s) named in scope not found in {INPUT_DIR}/: {absent}")
+        dir_label = f"{input_dir}/" if input_dir != os.curdir else "working directory"
+        raise WorkflowError(f"CSV file(s) named in scope not found in {dir_label}: {absent}")
     overrides = decisions.get("column_overrides", {})
     files, resolved = [], []
     for _, item, path in matched:
