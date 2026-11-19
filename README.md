@@ -1,4 +1,4 @@
-# cross-site-purchase-comparison (v0.4.1)
+# cross-site-purchase-comparison (v0.5.0)
 
 CSV-first workflow to compare prices for the same approved packaging specifications across plants. It preserves source reconciliation, explicit rules, approved-equivalence controls and human gates. Results are scenarios for buyer review, not achieved or guaranteed savings.
 
@@ -33,7 +33,9 @@ working-dir/
   inputs_csv/           # CSVs at paths referenced in scope.json
 ```
 
-**Built-in demo (no files):** run the script from an empty folder. With no scope file present it runs the embedded synthetic example through all three gate stages in memory and prints one JSON result. It writes nothing. This is the mode to use in Process Studio while file staging isn't working. After editing anything in `examples/synthetic/`, re-run `python3 tools/embed_demo.py` so the embedded copy matches.
+**Gate 0: setup (`--mode propose`).** Clients rarely have a tidy scope file or rules pack. Run the script with `--mode propose` on just the plant CSVs (or with a partial scope or rules). It writes nothing and returns what is missing (`needs`, e.g. pack sizes and FX rates, which are never guessed) and what it can safely suggest (`proposals`: scope, column mapping, candidate products, abbreviations). The agent asks the person in plain language and writes `scope.json` and `rules.json` from the answers, tagging each rule `user_confirmed` or `agent_proposed`. A run with any `agent_proposed` rule stays a DRAFT and never reaches FINAL.
+
+**Built-in demo (no files):** run the script from an empty folder. With no scope file present it runs the embedded synthetic example through all three gate stages in memory and prints one JSON result. It writes nothing. It proves the script runs on the platform. After editing anything in `examples/synthetic/`, re-run `python3 tools/embed_demo.py` so the embedded copy matches.
 
 **Your own files:** Run with that directory as current working directory:
 

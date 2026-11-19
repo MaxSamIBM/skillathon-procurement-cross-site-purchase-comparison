@@ -21,7 +21,7 @@ import sys
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 RULE_FILES = ("columns.json", "settings.json", "specs.csv", "item_map.csv",
               "spec_equivalences.csv", "abbreviations.csv", "unit_conversions.csv", "fx_rates.csv")
 RULES_FILE = "rules.json"
@@ -246,6 +246,23 @@ def _rules_source():
             tables, {n: _hash(p) for n, p in paths.items()})
 
 
+def _provenance(columns, settings, tables):
+    """Count rules by where they came from. Rows tagged source=agent_proposed are unconfirmed."""
+    counts = {"user_confirmed": 0, "agent_proposed": 0, "untagged": 0}
+    pending = []
+    for name, rows in [("columns", [columns]), ("settings", [settings])] + list(tables.items()):
+        for i, row in enumerate(rows, 1):
+            tag = str(row.get("source", "")).strip().lower() if isinstance(row, dict) else ""
+            if tag == UNCONFIRMED:
+                counts["agent_proposed"] += 1
+                pending.append(f"{name} #{i}" if name not in ("columns", "settings") else name)
+            elif tag == "user_confirmed":
+                counts["user_confirmed"] += 1
+            else:
+                counts["untagged"] += 1
+    return counts, pending
+
+
 def _load_rules():
     columns, settings, tables, fingerprints = _rules_source()
     required = columns["required"]
@@ -262,7 +279,8 @@ def _load_rules():
     bands = settings["volume_bands"]
     if not bands or bands[-1].get("below_labels_per_order") is not None:
         raise WorkflowError("settings.json: last volume band must have below_labels_per_order = null")
-    rules = {"required": required, "fields": fields, "aliases": aliases,
+    prov_counts, prov_pending = _provenance(columns, settings, tables)
+    rules = {"provenance": prov_counts, "unconfirmed": prov_pending, "required": required, "fields": fields, "aliases": aliases,
              "basis": _decimal(settings.get("price_basis_labels", 1000), "price basis"),
              "threshold": float(settings.get("matching", {}).get("propose_threshold", .6)),
              "bands": bands, "freight": {k.strip().upper(): v for k, v in settings["freight_groups"].items()},
@@ -735,6 +753,7 @@ def _run():
               "inputs": {"decisions_file": (decisions_name[2:] if decisions_name and decisions_name.startswith("./") else decisions_name) or "none (no decisions yet)",
                          "files": [{"plant": x["plant"], "file": x["file"], "sha256": _hash(p)} for x, p in zip(files, resolved)],
                          "rules_sha256": rules["fingerprints"]},
+              "rules_provenance": rules["provenance"],
               "files": [{k: f[k] for k in ("plant", "file", "header_row", "mapping", "mapping_basis", "unmapped", "missing", "errors", "reconciliation")} for f in files]}
     gate1 = []
     for f in files:
@@ -771,10 +790,14 @@ def _run():
         report["status"] = "BLOCKED_RELEASE_CHECKS"
     else:
         gate3 = decisions.get("gate3", {})
-        report["status"] = "FINAL" if not queue and gate3.get("approved") else "DRAFT"
+        unconfirmed = rules["unconfirmed"]
+        report["status"] = "FINAL" if not queue and not unconfirmed and gate3.get("approved") else "DRAFT"
         report["gates"] = [{"gate": "Gate 1", "status": "confirmed", "by": decisions.get("gate1", {}).get("by", "unnamed")},
                            {"gate": "Gate 2", "status": "open" if queue else "resolved", "pending_matches": len(queue)},
                            {"gate": "Gate 3", "status": "approved" if report["status"] == "FINAL" else "open", "by": gate3.get("by", "")}]
+        if unconfirmed:
+            report["gates"].insert(0, {"gate": "Gate 0", "status": "open", "unconfirmed_rules": len(unconfirmed), "which": unconfirmed[:20],
+                                       "fix": 'set "source": "user_confirmed" on each rule once the person has agreed to it'})
     _produce(OUT_DIR, report, lines, opportunities, queue, False)
     return report
 
@@ -785,6 +808,451 @@ def generate():
         return _run()
     except (WorkflowError, OSError, KeyError, TypeError, ValueError) as exc:
         return {"status": "ERROR", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------------------------
+# Gate 0: propose the setup from the plant files themselves. Reads only; writes nothing.
+# Facts only a person can give (pack sizes, exchange rates, unknown freight terms) become
+# blocking questions. Things the data shows (column mapping, date format, abbreviations,
+# candidate products, scope) become proposals tagged "agent_proposed" for a person to confirm.
+# ---------------------------------------------------------------------------------------------
+UNCONFIRMED = "agent_proposed"
+DEFAULT_REQUIRED = ["date", "description", "quantity", "purchase_unit", "unit_price", "currency"]
+DEFAULT_OPTIONAL = ["item_code", "supplier", "freight_terms", "line_amount"]
+DEFAULT_ALIASES = {
+    "date": ["po date", "date", "posting date", "order date", "doc date"],
+    "item_code": ["material", "item no", "mat code", "item code", "material number", "mat no"],
+    "description": ["material description", "item text", "mat desc", "description", "short text", "item description"],
+    "quantity": ["order qty", "order qty m", "quantity", "qty", "po quantity"],
+    "purchase_unit": ["uom", "unit", "oun", "order unit", "purchase unit"],
+    "unit_price": ["net price", "unit price", "price", "price per m"],
+    "currency": ["curr", "currency", "crcy", "cur"],
+    "supplier": ["vendor", "supplier name", "supplier", "vendor name"],
+    "freight_terms": ["incoterm", "delivery terms", "inco terms", "incoterms", "incot"],
+    "line_amount": ["net value", "line total", "value", "amount"]}
+DEFAULT_SETTINGS = {
+    "price_basis_labels": 1000, "matching": {"propose_threshold": 0.6},
+    "volume_bands": [{"name": "small", "below_labels_per_order": 100000}, {"name": "standard", "below_labels_per_order": None}],
+    "freight_groups": {"DAP": "delivered", "DDP": "delivered", "CPT": "delivered", "CIP": "delivered",
+                       "EXW": "ex-works", "FCA": "ex-works", "FOB": "ex-works"},
+    "min_plants_per_group": 2, "amount_tolerance": 0.01}
+# Order matters: the first match wins ("unit price" is a price, not a unit).
+FIELD_KEYWORDS = [("unit_price", ("price",)), ("line_amount", ("value", "amount", "total")),
+                  ("quantity", ("qty", "quantity")), ("purchase_unit", ("uom", "oun", "unit")),
+                  ("currency", ("curr", "crcy", "cur")), ("freight_terms", ("inco", "incot", "delivery terms", "freight")),
+                  ("supplier", ("vendor", "supplier")), ("description", ("desc", "text", "name")),
+                  ("item_code", ("material", "item", "code", "mat")), ("date", ("date",))]
+DATE_FORMATS = ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d.%m.%Y", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%Y/%m/%d")
+ISO_FORMATS = ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S")
+NON_PLANT_CSV = set(RULE_FILES)
+
+
+def _guess_field(header, aliases):
+    key = _norm(header)
+    if not key:
+        return None, None
+    if key in aliases:
+        return aliases[key], "alias"
+    tokens = key.split()
+    for field, words in FIELD_KEYWORDS:
+        for w in words:
+            if (" " in w and w in key) or any(t.startswith(w) for t in tokens):
+                return field, "keyword"
+    return None, None
+
+
+def _lenient_rules():
+    """Whatever rules exist, section by section. Missing sections are fine here (that is the point)."""
+    out = {"present": False, "sections": {}, "columns": None, "settings": None, "problems": [], "files": []}
+    path = _find_rules_file()
+    if path:
+        out["present"] = True
+        out["files"] = [RULES_FILE]
+        try:
+            pack = _json(path, RULES_FILE)
+            if not isinstance(pack, dict):
+                raise WorkflowError("rules.json must be a JSON object")
+            out["columns"], out["settings"] = pack.get("columns"), pack.get("settings")
+            for name, required in RULE_TABLES.items():
+                if name in pack:
+                    out["sections"][name] = _table_rows(pack[name], name, required)
+        except WorkflowError as e:
+            out["problems"].append(str(e))
+        return out
+    if os.path.isdir(RULES_DIR) and not os.path.islink(RULES_DIR):
+        try:
+            columns, settings, tables, _ = _rules_source()
+            out.update(present=True, columns=columns, settings=settings, sections=tables, files=list(RULE_FILES))
+        except WorkflowError as e:
+            out["problems"].append(str(e))
+    return out
+
+
+def _plant_name_guess(file_name):
+    stem = re.sub(r"\.csv$", "", file_name, flags=re.I)
+    m = re.search(r"plant[\s_-]*([a-z0-9]+)", stem, re.I)
+    if m:
+        return "Plant " + m.group(1).upper()
+    return re.sub(r"[_-]+", " ", stem).strip().title() or "Plant"
+
+
+def _date_candidates(values):
+    """Formats that read every non-empty date value. Returns [(format, [dates])]."""
+    vals = [v.strip() for v in values if v and v.strip()]
+    found = []
+    if not vals:
+        return found
+    for f in DATE_FORMATS:
+        try:
+            found.append((f, [dt.datetime.strptime(v, f).date() for v in vals]))
+        except ValueError:
+            continue
+    return found
+
+
+def _scan_file(plant, name, path, aliases):
+    info = {"plant": plant, "file": name, "header_row": None, "rows": 0, "mapping": {}, "mapping_basis": {},
+            "unmapped_headers": [], "missing_required": [], "problems": [], "date_format": None, "date_ambiguous": [],
+            "date_min": None, "date_max": None, "units": {}, "currencies": {}, "freight_terms": {},
+            "item_codes": [], "descriptions": []}
+    with _open_text(path, "utf-8-sig", newline="") as f:
+        source = list(csv.reader(f))
+    width = max((len(r) for r in source), default=0)
+    source = [r + [""] * (width - len(r)) for r in source]
+    best = None
+    for i, row in enumerate(source[:30]):
+        hits = sum(1 for v in row if _guess_field(v, aliases)[0])
+        if hits >= 2 and (best is None or hits > best[1]):
+            best = (i, hits)
+    if best is None:
+        info["problems"].append("Could not find a header row (fewer than 2 recognisable column names in the first 30 rows)")
+        return info
+    hdr = best[0]
+    info["header_row"] = hdr + 1
+    col = {}
+    for i, header in enumerate(source[hdr]):
+        header = str(header).strip()
+        if not header:
+            continue
+        field, basis = _guess_field(header, aliases)
+        if field is None:
+            info["unmapped_headers"].append(header)
+        elif field in col:
+            info["problems"].append(f"Two columns look like '{field}': '{source[hdr][col[field]].strip()}' and '{header}'")
+        else:
+            col[field] = i
+            info["mapping"][header], info["mapping_basis"][header] = field, basis
+    info["missing_required"] = [f for f in DEFAULT_REQUIRED if f not in col]
+
+    def cell(row, field):
+        i = col.get(field)
+        return row[i].strip() if i is not None and i < len(row) else ""
+
+    units, currencies, freight, codes, descs, dates = {}, {}, {}, set(), {}, []
+    for row in source[hdr + 1:]:
+        vals = [v.strip() for v in row]
+        if not any(vals):
+            continue
+        first = next((x for x in vals if x), "")
+        if TOTAL_RE.search(first) and not cell(row, "quantity"):
+            continue
+        info["rows"] += 1
+        for store, field in ((units, "purchase_unit"), (currencies, "currency"), (freight, "freight_terms")):
+            v = cell(row, field)
+            if v:
+                key = v.upper() if field != "purchase_unit" else _norm_unit(v)
+                entry = store.setdefault(key, {"text": v, "count": 0})
+                entry["count"] += 1
+        if cell(row, "item_code"):
+            codes.add(cell(row, "item_code"))
+        d = cell(row, "description")
+        if d:
+            descs.setdefault((cell(row, "item_code"), d), 0)
+            descs[(cell(row, "item_code"), d)] += 1
+        dates.append(cell(row, "date"))
+    info["units"] = {k: v for k, v in sorted(units.items())}
+    info["currencies"] = {k: v["count"] for k, v in sorted(currencies.items())}
+    info["freight_terms"] = {k: v["count"] for k, v in sorted(freight.items())}
+    info["item_codes"] = sorted(codes)[:40]
+    info["descriptions"] = [{"item_code": c, "description": d, "lines": n} for (c, d), n in sorted(descs.items())][:60]
+    cands = _date_candidates(dates)
+    iso = [c for c in cands if c[0] in ISO_FORMATS]
+    if "date" not in col or not cands:
+        if "date" in col and any(dates):
+            info["problems"].append("Dates could not be read with any common format")
+    elif iso:
+        info["date_format"] = None
+        parsed = iso[0][1]
+        info["date_min"], info["date_max"] = str(min(parsed)), str(max(parsed))
+    elif len(cands) == 1:
+        info["date_format"] = cands[0][0]
+        info["date_min"], info["date_max"] = str(min(cands[0][1])), str(max(cands[0][1]))
+    else:
+        info["date_ambiguous"] = [c[0] for c in cands]
+    return info
+
+
+def _is_subsequence(short, word):
+    it = iter(word)
+    return all(ch in it for ch in short)
+
+
+def _abbreviation_candidates(token_pool, known):
+    """Short tokens that are an unambiguous shortening of exactly one longer token in the data."""
+    out = {}
+    for t in sorted(token_pool):
+        if len(t) < 3 or len(t) > 5 or t.isdigit() or any(ch.isdigit() for ch in t) or t in known:
+            continue
+        longer = sorted(w for w in token_pool if w != t and len(w) > len(t) and w[0] == t[0] and _is_subsequence(t, w))
+        if len(longer) == 1:
+            out[t] = longer[0]
+    return out
+
+
+def _codey(tokens):
+    return all(len(t) <= 2 or any(ch.isdigit() for ch in t) for t in tokens)
+
+
+def _kept_apart(a, b):
+    """True when two descriptions differ only in a short code (X vs Y, 40mm vs 50mm): never merge those."""
+    only_a, only_b = a - b, b - a
+    return bool(only_a) and bool(only_b) and _codey(only_a) and _codey(only_b)
+
+
+def _cluster_descriptions(items, abbr, threshold):
+    """Group distinct (plant, item_code, description) into candidate products. Proposals only."""
+    clusters, kept_apart = [], []
+    for it in items:
+        toks = {abbr.get(t, t) for t in _norm(it["description"]).split()}
+        it["_tokens"] = toks
+        scored = []
+        for ci, cl in enumerate(clusters):
+            blocked = any(_kept_apart(toks, m["_tokens"]) and _score(toks, m["_tokens"]) >= threshold for m in cl)
+            sims = [_score(toks, m["_tokens"]) for m in cl]
+            if blocked:
+                kept_apart.append({"description": it["description"], "plant": it["plant"], "kept_apart_from": cl[0]["description"],
+                                   "why": "they differ only in a short code - treated as different specifications until a buyer says otherwise"})
+                continue
+            if max(sims) >= threshold:
+                scored.append((max(sims), ci))
+        scored.sort(reverse=True)
+        if scored:
+            if len(scored) > 1 and scored[0][0] - scored[1][0] <= 0.1:
+                it["ambiguous"] = True
+            clusters[scored[0][1]].append(it)
+        else:
+            clusters.append([it])
+    return clusters, kept_apart
+
+
+def propose():
+    """Gate 0. Reads the staged plant files (and any rules/scope already present) and says what is missing."""
+    try:
+        return _propose()
+    except (WorkflowError, OSError, KeyError, TypeError, ValueError) as exc:
+        return {"status": "ERROR", "error": str(exc)}
+
+
+def _propose():
+    rules = _lenient_rules()
+    input_dir = INPUT_DIR if (os.path.isdir(INPUT_DIR) and not os.path.islink(INPUT_DIR)) else os.curdir
+    scope, scope_problem = None, None
+    try:
+        scope = _json(_find_scope(), "scope")
+    except WorkflowError as e:
+        if "not found" not in str(e):
+            scope_problem = str(e)
+    scope_names = {}
+    if isinstance(scope, dict):
+        for item in scope.get("files", []) or []:
+            if isinstance(item, dict) and isinstance(item.get("file"), str):
+                scope_names[item["file"]] = item
+    aliases = {}
+    columns = rules["columns"] if isinstance(rules["columns"], dict) else None
+    if columns and isinstance(columns.get("aliases"), dict):
+        for field, names in columns["aliases"].items():
+            for n in names:
+                aliases[_norm(n)] = field
+    else:
+        for field, names in DEFAULT_ALIASES.items():
+            for n in names:
+                aliases[_norm(n)] = field
+    candidates = [(n, p) for n, p in _input_listing(input_dir)
+                  if n.lower().endswith(".csv") and n not in NON_PLANT_CSV and not n.startswith(("decisions", "scope"))]
+    needs, proposals = [], []
+
+    def need(kind, ask, blocking=True, **extra):
+        needs.append({"id": f"N{len(needs) + 1}", "kind": kind, "blocking": blocking, "ask": ask, **extra})
+
+    def propose_item(kind, what, **extra):
+        proposals.append({"id": f"P{len(proposals) + 1}", "kind": kind, "source": UNCONFIRMED, "what": what, **extra})
+
+    if len(candidates) < 2:
+        need("plant_files", "Attach at least two plant purchase CSV files (one per site) so prices can be compared.",
+             found=[n for n, _ in candidates])
+    scans = []
+    for name, path in candidates:
+        plant = scope_names.get(name, {}).get("plant") or _plant_name_guess(name)
+        scans.append(_scan_file(plant, name, path, aliases))
+    for problem in rules["problems"]:
+        need("rules_problem", "The rules file could not be used and was ignored: " + problem + " Ask the person to fix or resend it.")
+    for s in scans:
+        if s["problems"]:
+            need("file_problem", f"{s['plant']} ({s['file']}): " + "; ".join(s["problems"]), file=s["file"])
+        if s["header_row"] and s["missing_required"]:
+            need("column_mapping", f"{s['plant']} ({s['file']}): which column holds {s['missing_required']}?",
+                 file=s["file"], unmapped_headers=s["unmapped_headers"], missing=s["missing_required"],
+                 write_to='decisions.json > column_overrides > "' + s["plant"] + '"')
+        if s["date_ambiguous"]:
+            need("date_format", f"{s['plant']} ({s['file']}): dates fit more than one format {s['date_ambiguous']}. Which is it (day first or month first)?",
+                 file=s["file"], options=s["date_ambiguous"], write_to="scope.json > files > date_format")
+    # Reporting currency: scope if present, else the most common currency in the data (a proposal).
+    totals = {}
+    for s in scans:
+        for cur, n in s["currencies"].items():
+            totals[cur] = totals.get(cur, 0) + n
+    reporting = None
+    if isinstance(scope, dict) and scope.get("reporting_currency"):
+        reporting = str(scope["reporting_currency"]).upper()
+    elif totals:
+        reporting = max(sorted(totals), key=lambda c: totals[c])
+        propose_item("reporting_currency", f"Report prices in {reporting} (the most common currency in the files)", value=reporting)
+    # Unit pack sizes: only a person can say how many labels are in a roll.
+    unit_rows = rules["sections"].get("unit_conversions") or []
+    have_units = {(_norm_unit(r["unit_alias"]), r["plant"].strip().lower() or "*") for r in unit_rows}
+    seen_units = {}
+    for s in scans:
+        for key, v in s["units"].items():
+            seen_units.setdefault(key, {"text": v["text"], "plants": {}})["plants"][s["plant"]] = v["count"]
+    for key, v in sorted(seen_units.items()):
+        covered = (key, "*") in have_units or all((key, p.lower()) in have_units for p in v["plants"])
+        if covered:
+            continue
+        number = re.findall(r"\d+", v["text"])
+        hint = f"the name contains {number[0]}; that may be the labels per unit - confirm" if len(number) == 1 else None
+        need("unit_pack_size", f"How many labels are in one '{v['text']}'? Used by: " + ", ".join(f"{p} ({n} lines)" for p, n in sorted(v["plants"].items())) + ".",
+             unit=v["text"], hint=hint,
+             write_to="rules.json > unit_conversions",
+             template_row={"rule_id": "UC-<next>", "unit_alias": v["text"], "plant": "*", "labels_per_unit": "<ask>", "note": "", "source": "user_confirmed"})
+    # Exchange rates: never invented.
+    fx_rows = rules["sections"].get("fx_rates") or []
+    have_fx = {(r["currency"].upper(), r["reporting_currency"].upper()) for r in fx_rows}
+    if reporting:
+        for cur in sorted(totals):
+            if cur != reporting and (cur, reporting) not in have_fx:
+                need("fx_rate", f"What exchange rate should be used for {cur} to {reporting}, and for what date?", currency=cur,
+                     write_to="rules.json > fx_rates",
+                     template_row={"rule_id": "FX-<next>", "currency": cur, "rate_to_reporting": "<ask>", "reporting_currency": reporting, "as_of": "<ask>", "source_note": "", "source": "user_confirmed"})
+    # Freight terms.
+    groups = {}
+    if isinstance(rules["settings"], dict) and isinstance(rules["settings"].get("freight_groups"), dict):
+        groups = {k.strip().upper(): v for k, v in rules["settings"]["freight_groups"].items()}
+    else:
+        groups = dict(DEFAULT_SETTINGS["freight_groups"])
+    seen_freight = {}
+    for s in scans:
+        for term, n in s["freight_terms"].items():
+            seen_freight.setdefault(term, []).append(s["plant"])
+    for term, plants in sorted(seen_freight.items()):
+        if term not in groups:
+            need("freight_term", f"Is freight term '{term}' (used by {', '.join(sorted(set(plants)))}) delivered or ex-works?", term=term,
+                 write_to="rules.json > settings > freight_groups")
+    # Abbreviations and candidate products.
+    all_items = []
+    for s in scans:
+        for d in s["descriptions"]:
+            all_items.append({"plant": s["plant"], "item_code": d["item_code"], "description": d["description"], "lines": d["lines"]})
+    have_abbr = {r["short"].strip().lower(): r["long"].strip().lower() for r in (rules["sections"].get("abbreviations") or [])}
+    pool = {t for it in all_items for t in _norm(it["description"]).split()}
+    new_abbr = {k: v for k, v in _abbreviation_candidates(pool, set(have_abbr)).items() if k not in have_abbr}
+    for short, long_ in sorted(new_abbr.items()):
+        propose_item("abbreviation", f"'{short}' probably means '{long_}'", short=short, long=long_)
+    abbr_all = dict(have_abbr)
+    abbr_all.update(new_abbr)
+    threshold = 0.6
+    if isinstance(rules["settings"], dict):
+        threshold = float(rules["settings"].get("matching", {}).get("propose_threshold", 0.6))
+    specs_rules = rules["sections"].get("specs") or []
+    kept_apart, clusters = [], []
+    if not specs_rules and all_items:
+        clusters, kept_apart = _cluster_descriptions([dict(i) for i in all_items], abbr_all, threshold)
+        for n, cl in enumerate(clusters, 1):
+            members = [{"plant": m["plant"], "item_code": m["item_code"], "description": m["description"], "lines": m["lines"]} for m in cl]
+            plants = sorted({m["plant"] for m in cl})
+            alone = len(plants) < 2
+            propose_item("candidate_product", f"Candidate product SPEC-{n}: " + ("; ".join(f"{m['plant']}: '{m['description']}'" for m in members)),
+                         spec_id=f"SPEC-{n}", spec_name=sorted((m["description"] for m in cl), key=len)[0], members=members,
+                         note=("Only one plant buys this, so it cannot be compared until another plant's item is matched to it." if alone else "Confirm these are the same product."),
+                         ambiguous=any(m.get("ambiguous") for m in cl))
+        for k in kept_apart:
+            propose_item("kept_apart", f"'{k['description']}' ({k['plant']}) is kept apart from '{k['kept_apart_from']}': {k['why']}")
+    elif specs_rules and all_items:
+        approved = {(r["plant"].strip().lower(), r["item_code"].strip().lower()) for r in (rules["sections"].get("item_map") or []) if r["status"].lower() == "approved" and r["item_code"]}
+        approved_d = {(r["plant"].strip().lower(), _norm(r["description"])) for r in (rules["sections"].get("item_map") or []) if r["status"].lower() == "approved" and r["description"]}
+        unmapped = [i for i in all_items if not ((i["plant"].lower(), i["item_code"].lower()) in approved or (i["plant"].lower(), _norm(i["description"])) in approved_d)]
+        if unmapped:
+            need("unmapped_items", f"{len(unmapped)} item(s) have no approved match to a product yet. They will land in Needs review / Gate 2 unless you map them now.",
+                 blocking=False, items=[{"plant": i["plant"], "item_code": i["item_code"], "description": i["description"]} for i in unmapped[:25]])
+    # Missing rule sections the engine needs.
+    if not columns:
+        propose_item("columns", "Use the column mapping found in the files", write_to="rules.json > columns",
+                     value={"required": DEFAULT_REQUIRED, "optional": DEFAULT_OPTIONAL, "aliases": _alias_proposal(scans)})
+    if not isinstance(rules["settings"], dict):
+        propose_item("settings", "Use standard settings: price per 1,000 labels, orders under 100,000 labels count as 'small', standard Incoterm groups, at least 2 plants per comparison",
+                     write_to="rules.json > settings", value=DEFAULT_SETTINGS)
+    # Scope proposal.
+    mins = [s["date_min"] for s in scans if s["date_min"]]
+    maxs = [s["date_max"] for s in scans if s["date_max"]]
+    scope_proposal = None
+    if not isinstance(scope, dict):
+        files = []
+        for s in scans:
+            entry = {"plant": s["plant"], "file": s["file"]}
+            if s["date_format"]:
+                entry["date_format"] = s["date_format"]
+            files.append(entry)
+        scope_proposal = {"project": "<name>", "category": "<ask>", "reporting_currency": reporting or "<ask>",
+                          "window": {"start": min(mins) if mins else "<ask>", "end": max(maxs) if maxs else "<ask>"}, "files": files}
+        propose_item("scope", "Compare these plants and files over the date range found in them (a person should confirm the window and category)",
+                     write_to="scope.json", value=scope_proposal)
+        need("category", "What product category is this (for example packaging-labels)?", blocking=False, write_to="scope.json > category")
+    elif scope_problem:
+        need("scope_problem", scope_problem)
+    # Provenance and an item_map patch for the candidate products.
+    patch = {}
+    if clusters:
+        specs, item_map = [], []
+        for n, cl in enumerate(clusters, 1):
+            specs.append({"spec_id": f"SPEC-{n}", "spec_name": sorted((m["description"] for m in cl), key=len)[0], "source": UNCONFIRMED})
+            for m in cl:
+                item_map.append({"plant": m["plant"], "item_code": m["item_code"], "description": m["description"], "spec_id": f"SPEC-{n}",
+                                 "status": "proposed", "approved_by": "", "source": UNCONFIRMED})
+        patch.update(specs=specs, item_map=item_map, spec_equivalences=[])
+    if new_abbr:
+        patch["abbreviations"] = [{"short": k, "long": v, "source": UNCONFIRMED} for k, v in sorted(new_abbr.items())]
+    blocking = [n for n in needs if n["blocking"]]
+    status = "GATE_0_NEEDS_INPUT" if blocking else ("GATE_0_CONFIRM_PROPOSALS" if (proposals or needs) else "GATE_0_READY")
+    out = {"skill": "cross-site-purchase-comparison", "version": VERSION, "mode": "propose", "status": status,
+           "wrote_files": False, "plain_summary": f"{len(blocking)} question(s) only a person can answer, {len(proposals)} proposal(s) to confirm.",
+           "found": {"plant_files": [s["file"] for s in scans], "rules_files": rules["files"], "rules_sections": sorted(rules["sections"]),
+                     "scope_present": isinstance(scope, dict), "rules_problems": rules["problems"]},
+           "scan": [{k: v for k, v in s.items() if k not in ("descriptions", "item_codes")} | {"distinct_descriptions": len(s["descriptions"])} for s in scans],
+           "needs": needs, "proposals": proposals}
+    if patch:
+        out["rules_patch"] = patch
+    out["next_step"] = ("Ask the person each blocking question in plain language, show each proposal for confirmation, then write scope.json and rules.json "
+                        "(mark confirmed rows source=user_confirmed; leave unconfirmed ones source=agent_proposed), and run --mode run for Gate 1.")
+    return out
+
+
+def _alias_proposal(scans):
+    aliases = {f: [] for f in DEFAULT_REQUIRED + DEFAULT_OPTIONAL}
+    for s in scans:
+        for header, field in s["mapping"].items():
+            n = _norm(header)
+            if n and n not in aliases[field]:
+                aliases[field].append(n)
+    return aliases
 
 
 # BEGIN DEMO DATA
@@ -1148,6 +1616,8 @@ def _summary(report):
         keep["counts"] = report["counts"]
     if report.get("gates"):
         keep["gates"] = report["gates"]
+    if report.get("rules_provenance") and report["rules_provenance"].get("agent_proposed"):
+        keep["rules_provenance"] = report["rules_provenance"]
     if report.get("release_checks"):
         keep["release_checks"] = [f"{c.get('id')} {c.get('result')}: {c.get('check')}" for c in report["release_checks"]]
     if report.get("gate2_queue"):
@@ -1188,15 +1658,19 @@ def _has_staged_scope():
 
 
 def _parse_mode():
-    """Optional --mode {auto,demo,run}; declared in scripts/manifest.json. Never used as a path."""
+    """Optional --mode {auto,demo,run,propose}; declared in scripts/manifest.json. Never used as a path."""
     import argparse
     parser = argparse.ArgumentParser(description="Cross-site purchase comparison")
-    parser.add_argument("--mode", choices=("auto", "demo", "run"), default="auto")
+    parser.add_argument("--mode", choices=("auto", "demo", "run", "propose"), default="auto")
     return parser.parse_args().mode
 
 
 def main():
     mode = _parse_mode()
+    if mode == "propose":
+        result = propose()
+        print(json.dumps(_plain(result), indent=2, ensure_ascii=False))
+        return 1 if result.get("status") == "ERROR" else 0
     try:
         use_demo = mode == "demo" or (mode == "auto" and not _has_staged_scope())
     except WorkflowError as e:
