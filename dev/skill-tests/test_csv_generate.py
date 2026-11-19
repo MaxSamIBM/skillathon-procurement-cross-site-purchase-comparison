@@ -303,3 +303,34 @@ class PlatformContractTests(unittest.TestCase):
             head = f.read().split("---")[1]
         for needed in ("type: workflow", "multi_turn: true", "run_skill_script", "list_temp_files", "write_temp_file", "save_output_file"):
             self.assertIn(needed, head)
+
+
+class DecisionsShapeTests(unittest.TestCase):
+    """A decisions file with the wrong shape must be an error, not a silent 'nothing decided'."""
+
+    def _run(self, decisions_text):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("scope_csv.json", "rules.json"):
+                shutil.copy(os.path.join(EX, name), tmp)
+            for name in os.listdir(os.path.join(EX, "inputs_csv")):
+                shutil.copy(os.path.join(EX, "inputs_csv", name), tmp)
+            with open(os.path.join(tmp, "decisions.json"), "w", encoding="utf-8") as f:
+                f.write(decisions_text)
+            with _in_dir(tmp):
+                return _load().generate()
+
+    def test_top_level_confirmed_is_rejected_with_a_helpful_message(self):
+        report = self._run('{"gate1_confirmed": true}')
+        self.assertEqual(report["status"], "ERROR")
+        self.assertIn("gate1_confirmed", report["error"])
+        self.assertIn('"gate1"', report["error"])
+
+    def test_gate1_as_a_string_is_rejected(self):
+        report = self._run('{"gate1": "confirmed"}')
+        self.assertEqual(report["status"], "ERROR")
+
+    def test_correct_shape_advances_to_draft_and_records_the_file(self):
+        report = self._run('{"gate1": {"confirmed": true, "by": "Procurement consultant (role)"}, '
+                           '"column_overrides": {"Plant D": {"Order Qty (M)": "quantity", "Price per M": "unit_price"}}}')
+        self.assertEqual(report["status"], "DRAFT")
+        self.assertEqual(report["inputs"]["decisions_file"], "decisions.json")

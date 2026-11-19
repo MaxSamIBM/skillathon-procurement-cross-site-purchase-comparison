@@ -20,10 +20,10 @@ allowed-tools:
   - stage_blueprint_to_temp
   - stage_artifact_to_temp
 metadata:
-  version: 0.4.0
+  version: 0.4.1
 ---
 
-# cross-site-purchase-comparison (v0.4.0)
+# cross-site-purchase-comparison (v0.4.1)
 
 **Business question:** *Are different parts of the client paying different prices for the same thing, and which differences are worth investigating?*
 
@@ -98,6 +98,15 @@ Steps, in order:
 6. **Gate 3 and FINAL run.** Only when the person explicitly signs off, add the sign-off to `decisions.json` and run once more. Without it the result stays a DRAFT.
 7. **Deliver.** Call `save_output_file` for `out/opportunities.csv`, `out/needs_review.csv` and `out/run_report.json`.
 
+**One script run per turn.** The platform refuses a second `run_skill_script` call in the same turn (`ALREADY_STARTED`). So get `decisions.json` right *before* you run: write it with `write_temp_file`, call `read_temp_file` to check it, and only then run the script. If a run used the wrong decisions, do not retry: tell the user what happened and ask them to send any message to continue.
+
+**`decisions.json` must have exactly this shape.** Any other key is rejected with an error that names it (the script never treats a malformed file as "nothing decided").
+- Gate 1: `{"gate1": {"confirmed": true, "by": "<role>"}, "column_overrides": {"<Plant>": {"<header>": "<field>"}}}` (omit `column_overrides` if none are needed).
+- Gate 2: add `"match_decisions": [...]`, one entry per match the person approved or rejected, in the form used in `examples/synthetic/decisions_2_signed_off.json`.
+- Gate 3: add `"gate3": {"approved": true, "by": "<role>"}` only when the person explicitly signs off.
+
+Write a plain `decisions.json`. If a `decisions_*.json` was also uploaded, `decisions.json` takes priority; the run report records which file was used (`inputs.decisions_file`), so check it. Never write a gate as confirmed unless the person said so in this chat.
+
 Pause for the person at every gate. Their reply arrives as the next message; that is what `multi_turn` is for. If a run returns `STOPPED_RECONCILIATION` or `ERROR`, show the exact message and stop.
 
 ## Mode 3: chat-only review (fallback if the script is blocked)
@@ -136,7 +145,7 @@ Use only if `run_skill_script` is blocked for this skill and the user agrees to 
 ## Ready for another client
 Change only: the plant exports, `scope.json`, the rules pack (headers, specifications and item map, unit conversions, FX, bands) and `decisions.json`. No code changes. Replace the synthetic rules with the client's; never put client data in this folder.
 
-## Limits of v0.4.0 (be honest with the client)
+## Limits of v0.4.1 (be honest with the client)
 - One category (packaging labels), one price basis (per 1,000 labels), CSV input only. Excel files must be exported to CSV first.
 - Savings are scenarios. They don't confirm that a price is available at another plant's volume, location or terms. A buyer must confirm.
 - Column mapping uses exact aliases plus a person; there is no fuzzy header guessing.

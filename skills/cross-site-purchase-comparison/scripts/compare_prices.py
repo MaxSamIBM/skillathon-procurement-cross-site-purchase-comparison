@@ -21,7 +21,7 @@ import sys
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 RULE_FILES = ("columns.json", "settings.json", "specs.csv", "item_map.csv",
               "spec_equivalences.csv", "abbreviations.csv", "unit_conversions.csv", "fx_rates.csv")
 RULES_FILE = "rules.json"
@@ -174,6 +174,26 @@ def _json(path, what):
             return json.load(f)
     except (OSError, ValueError) as e:
         raise WorkflowError(f"{what} is not readable valid JSON: {e}")
+
+
+_DECISION_KEYS = {"gate1", "gate2", "gate3", "column_overrides", "match_decisions", "_doc"}
+
+
+def _check_decisions(decisions):
+    """A decisions file with the wrong shape must fail loudly, never be read as 'nothing decided'."""
+    if not isinstance(decisions, dict):
+        raise WorkflowError("decisions must be a JSON object like the one in examples/synthetic/decisions_1_scope_confirmed.json")
+    unknown = sorted(k for k in decisions if k not in _DECISION_KEYS)
+    if unknown:
+        raise WorkflowError(f"decisions has unrecognised key(s) {unknown}; allowed keys are {sorted(_DECISION_KEYS - {'_doc'})}. "
+                            'Gate 1 looks like {"gate1": {"confirmed": true, "by": "<role>"}}')
+    for gate in ("gate1", "gate3"):
+        if gate in decisions and not isinstance(decisions[gate], dict):
+            raise WorkflowError(f'"{gate}" must be an object such as {{"confirmed": true, "by": "<role>"}}')
+    if "match_decisions" in decisions and not isinstance(decisions["match_decisions"], list):
+        raise WorkflowError('"match_decisions" must be a list')
+    if "column_overrides" in decisions and not isinstance(decisions["column_overrides"], dict):
+        raise WorkflowError('"column_overrides" must be an object keyed by plant')
 
 
 def _read_csv(path, required=()):
@@ -681,6 +701,7 @@ def _run():
         os.makedirs(OUT_DIR, exist_ok=True)
     scope = _json(scope_name, "scope")
     decisions = _json(decisions_name, "decisions") if decisions_name else {}
+    _check_decisions(decisions)
     for key in ("reporting_currency", "window", "files"):
         if key not in scope: raise WorkflowError(f"scope is missing '{key}'")
     if len(scope["files"]) < 2: raise WorkflowError("At least two plant CSV files are needed")
@@ -711,7 +732,8 @@ def _run():
         files.append(_load_file(item["plant"], path, rules, overrides.get(item["plant"], {}), item.get("date_format"), item["file"]))
     report = {"skill": "cross-site-purchase-comparison", "version": VERSION,
               "run_at": dt.datetime.now().isoformat(timespec="seconds"), "status": None,
-              "inputs": {"files": [{"plant": x["plant"], "file": x["file"], "sha256": _hash(p)} for x, p in zip(files, resolved)],
+              "inputs": {"decisions_file": (decisions_name[2:] if decisions_name and decisions_name.startswith("./") else decisions_name) or "none (no decisions yet)",
+                         "files": [{"plant": x["plant"], "file": x["file"], "sha256": _hash(p)} for x, p in zip(files, resolved)],
                          "rules_sha256": rules["fingerprints"]},
               "files": [{k: f[k] for k in ("plant", "file", "header_row", "mapping", "mapping_basis", "unmapped", "missing", "errors", "reconciliation")} for f in files]}
     gate1 = []
