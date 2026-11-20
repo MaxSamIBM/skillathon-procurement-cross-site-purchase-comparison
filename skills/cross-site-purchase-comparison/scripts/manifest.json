@@ -8,7 +8,8 @@
             "auto",
             "demo",
             "run",
-            "propose"
+            "propose",
+            "setup"
           ],
           "required": false
         }

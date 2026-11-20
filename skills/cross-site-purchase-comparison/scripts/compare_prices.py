@@ -21,7 +21,7 @@ import sys
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 RULE_FILES = ("columns.json", "settings.json", "specs.csv", "item_map.csv",
               "spec_equivalences.csv", "abbreviations.csv", "unit_conversions.csv", "fx_rates.csv")
 RULES_FILE = "rules.json"
@@ -131,6 +131,23 @@ def _find_decisions():
     return found[matches[0]] if matches else None
 
 
+def _find_setup():
+    return _index(os.curdir).get("setup.json")
+
+
+def _load_scope():
+    """scope.json if attached, otherwise the scope built from setup.json."""
+    try:
+        return _json(_find_scope(), "scope")
+    except WorkflowError as e:
+        if "not found" in str(e) and _find_setup():
+            built = _build_setup()
+            if built["questions"]:
+                raise WorkflowError(f"setup.json is incomplete: {len(built['questions'])} question(s) still open. Run --mode setup.")
+            return built["scope"]
+        raise
+
+
 def _find_rules_file():
     return _index(os.curdir).get(RULES_FILE)
 
@@ -223,8 +240,19 @@ def _table_rows(rows, name, required):
     return out
 
 
-def _rules_source():
-    """Rules come from one rules.json (preferred) or the eight files in rules/."""
+def _rules_source(use_setup=True):
+    """Rules come from setup.json answers (built here), one rules.json, or the eight files in rules/."""
+    if use_setup and _find_setup():
+        built = _build_setup()
+        if built["questions"]:
+            first = built["questions"][0]["ask"]
+            raise WorkflowError(f"setup.json is incomplete: {len(built['questions'])} question(s) still open (first: {first}). Run --mode setup.")
+        pack = built["pack"]
+        tables = {k: _table_rows(pack[k], k, req) for k, req in RULE_TABLES.items()}
+        fingerprints = {SETUP_NAME: _hash(_find_setup())}
+        if _find_rules_file():
+            fingerprints[RULES_FILE] = _hash(_find_rules_file())
+        return pack["columns"], pack["settings"], tables, fingerprints
     rules_path = _find_rules_file()
     if rules_path:
         pack = _json(rules_path, RULES_FILE)
@@ -246,14 +274,17 @@ def _rules_source():
             tables, {n: _hash(p) for n, p in paths.items()})
 
 
-def _provenance(columns, settings, tables):
-    """Count rules by where they came from. Rows tagged source=agent_proposed are unconfirmed."""
+def _provenance(columns, settings, tables, decided=frozenset()):
+    """Count rules by where they came from. Rows tagged source=agent_proposed are unconfirmed.
+    A proposed item_map row that a person has since decided at Gate 2 counts as confirmed."""
     counts = {"user_confirmed": 0, "agent_proposed": 0, "untagged": 0}
     pending = []
     for name, rows in [("columns", [columns]), ("settings", [settings])] + list(tables.items()):
         for i, row in enumerate(rows, 1):
             tag = str(row.get("source", "")).strip().lower() if isinstance(row, dict) else ""
-            if tag == UNCONFIRMED:
+            if tag == UNCONFIRMED and name == "item_map" and (str(row.get("plant", "")).strip().lower(), _norm(row.get("description", ""))) in decided:
+                counts["user_confirmed"] += 1
+            elif tag == UNCONFIRMED:
                 counts["agent_proposed"] += 1
                 pending.append(f"{name} #{i}" if name not in ("columns", "settings") else name)
             elif tag == "user_confirmed":
@@ -263,8 +294,10 @@ def _provenance(columns, settings, tables):
     return counts, pending
 
 
-def _load_rules():
+def _load_rules(decisions=None):
     columns, settings, tables, fingerprints = _rules_source()
+    decided = {(str(d["plant"]).strip().lower(), _norm(d["description"])) for d in ((decisions or {}).get("match_decisions") or [])
+               if isinstance(d, dict) and d.get("plant") and d.get("description")}
     required = columns["required"]
     fields = required + columns.get("optional", [])
     aliases = {}
@@ -279,7 +312,7 @@ def _load_rules():
     bands = settings["volume_bands"]
     if not bands or bands[-1].get("below_labels_per_order") is not None:
         raise WorkflowError("settings.json: last volume band must have below_labels_per_order = null")
-    prov_counts, prov_pending = _provenance(columns, settings, tables)
+    prov_counts, prov_pending = _provenance(columns, settings, tables, decided)
     rules = {"provenance": prov_counts, "unconfirmed": prov_pending, "required": required, "fields": fields, "aliases": aliases,
              "basis": _decimal(settings.get("price_basis_labels", 1000), "price basis"),
              "threshold": float(settings.get("matching", {}).get("propose_threshold", .6)),
@@ -710,14 +743,13 @@ def _produce(out_dir, report, lines, opportunities, queue, g1):
 
 
 def _run():
-    scope_name = _find_scope()
     decisions_name = _find_decisions()
     if _VFS is not None:
         input_dir = INPUT_DIR
     else:
         input_dir = INPUT_DIR if (os.path.isdir(INPUT_DIR) and not os.path.islink(INPUT_DIR)) else os.curdir
         os.makedirs(OUT_DIR, exist_ok=True)
-    scope = _json(scope_name, "scope")
+    scope = _load_scope()
     decisions = _json(decisions_name, "decisions") if decisions_name else {}
     _check_decisions(decisions)
     for key in ("reporting_currency", "window", "files"):
@@ -729,7 +761,7 @@ def _run():
         name = item.get("file")
         if not isinstance(name, str) or not name.lower().endswith(".csv") or os.path.basename(name) != name:
             raise WorkflowError(f"Scope entry for {item.get('plant')!r} must give 'file' as a bare .csv file name")
-    rules = _load_rules()
+    rules = _load_rules(decisions)
     # Scope names are only ever compared with the folder listing; the files that get opened
     # are the listing's own entries, so scope text never becomes part of a path.
     matched = []
@@ -881,7 +913,7 @@ def _lenient_rules():
         return out
     if os.path.isdir(RULES_DIR) and not os.path.islink(RULES_DIR):
         try:
-            columns, settings, tables, _ = _rules_source()
+            columns, settings, tables, _ = _rules_source(use_setup=False)
             out.update(present=True, columns=columns, settings=settings, sections=tables, files=list(RULE_FILES))
         except WorkflowError as e:
             out["problems"].append(str(e))
@@ -1053,7 +1085,7 @@ def propose():
         return {"status": "ERROR", "error": str(exc)}
 
 
-def _propose():
+def _propose(reporting_override=None):
     rules = _lenient_rules()
     input_dir = INPUT_DIR if (os.path.isdir(INPUT_DIR) and not os.path.islink(INPUT_DIR)) else os.curdir
     scope, scope_problem = None, None
@@ -1114,6 +1146,9 @@ def _propose():
     reporting = None
     if isinstance(scope, dict) and scope.get("reporting_currency"):
         reporting = str(scope["reporting_currency"]).upper()
+    elif reporting_override:
+        reporting = str(reporting_override).strip().upper()
+        propose_item("reporting_currency", f"Report prices in {reporting} (your answer)", value=reporting)
     elif totals:
         reporting = max(sorted(totals), key=lambda c: totals[c])
         propose_item("reporting_currency", f"Report prices in {reporting} (the most common currency in the files)", value=reporting)
@@ -1240,8 +1275,319 @@ def _propose():
            "needs": needs, "proposals": proposals}
     if patch:
         out["rules_patch"] = patch
-    out["next_step"] = ("Ask the person each blocking question in plain language, show each proposal for confirmation, then write scope.json and rules.json "
-                        "(mark confirmed rows source=user_confirmed; leave unconfirmed ones source=agent_proposed), and run --mode run for Gate 1.")
+    out["next_step"] = ("Prefer --mode setup: it returns the same questions plus a setup_template. Record the person's answers in setup.json "
+                        "and the script builds rules.json and scope.json, tagging every answered rule user_confirmed.")
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Gate 0 setup: one file of answers (setup.json) in, finished rules.json + scope.json out.
+# The agent only records what the person said in setup.json. This code turns the answers into the
+# rules pack and scope, tags every answered or confirmed rule "user_confirmed", and lists exactly
+# what is still open. Nothing here ever invents a pack size, an exchange rate or a match approval.
+# ---------------------------------------------------------------------------------------------
+SETUP_NAME = "setup.json"
+ASK = "<ask>"
+_SETUP_KEYS = {"_doc", "confirmed_by", "category", "project", "reporting_currency", "window", "date_formats",
+               "unit_pack_sizes", "fx_rates", "freight_terms", "confirm", "products"}
+_SKIP_WORDS = {"unknown", "skip", "leave out", "leave_out", "none", "n/a", "dont know", "don't know"}
+
+
+def _setup_answers():
+    path = _find_setup()
+    if not path:
+        return {}
+    data = _json(path, "setup")
+    if not isinstance(data, dict):
+        raise WorkflowError("setup.json must be a JSON object")
+    bad = sorted(set(data) - _SETUP_KEYS)
+    if bad:
+        raise WorkflowError(f"setup.json has unrecognised key(s) {bad}. Allowed: {sorted(_SETUP_KEYS - {'_doc'})}. "
+                            "Run --mode setup and copy setup_template.")
+    return data
+
+
+def _answered(v):
+    return v is not None and not (isinstance(v, str) and v.strip() in ("", ASK))
+
+
+def _positive_number(v):
+    try:
+        d = Decimal(str(v).replace(",", "").strip())
+    except (InvalidOperation, ValueError):
+        return None
+    return d if d > 0 else None
+
+
+def _num_text(d):
+    return format(d.normalize(), "f")
+
+
+def _iso(v):
+    try:
+        return str(dt.date.fromisoformat(str(v).strip()))
+    except ValueError:
+        return None
+
+
+def _build_setup():
+    ans = _setup_answers()
+    reporting_ans = str(ans["reporting_currency"]).strip().upper() if _answered(ans.get("reporting_currency")) else None
+    base = _propose(reporting_ans)
+    if base.get("status") == "ERROR":
+        raise WorkflowError(base["error"])
+    rules = _lenient_rules()
+    questions, recorded, blockers = [], [], []
+    tpl = {"_doc": "Answers for Gate 0. Replace each \"<ask>\" with the person's answer. For a pack size the person does not know, "
+                   "write null: that unit then stays out of the comparison and its lines go to Needs review."}
+
+    def ask(topic, text, key, **extra):
+        questions.append({"id": f"Q{len(questions) + 1}", "topic": topic, "ask": text, "answer_key": key, **extra})
+
+    who = str(ans["confirmed_by"]).strip() if _answered(ans.get("confirmed_by")) else None
+    tpl["confirmed_by"] = who or ASK
+    if not who:
+        ask("who", "What role should be recorded as having confirmed these answers (for example 'Procurement consultant')?", "confirmed_by")
+    by = who or "unnamed"
+    confirm_in = ans.get("confirm") if isinstance(ans.get("confirm"), dict) else {}
+    confirm_out = {}
+
+    def confirmed(name, active):
+        if not active:
+            return True
+        ok = confirm_in.get(name) is True
+        confirm_out[name] = True if ok else ASK
+        return ok
+
+    for need in base["needs"]:
+        if need["kind"] in ("plant_files", "file_problem", "rules_problem", "scope_problem"):
+            blockers.append(need["ask"])
+            ask(need["kind"], need["ask"], "(fix the files, then rerun)")
+
+    # ---- scope -------------------------------------------------------------------------------
+    scope_prop = next((p["value"] for p in base["proposals"] if p["kind"] == "scope"), None)
+    if base["found"]["scope_present"]:
+        scope = _json(_find_scope(), "scope")
+        recorded.append("scope: used the attached scope file")
+    else:
+        scope = json.loads(json.dumps(scope_prop)) if scope_prop else {"files": []}
+        scan_lo, scan_hi = (scope_prop or {}).get("window", {}).get("start"), (scope_prop or {}).get("window", {}).get("end")
+        if _answered(ans.get("category")):
+            scope["category"] = str(ans["category"]).strip()
+            recorded.append(f"category: {scope['category']}")
+        else:
+            ask("category", "What product category is this (for example packaging-labels)?", "category")
+        tpl["category"] = scope["category"] if _answered(ans.get("category")) else ASK
+        scope["project"] = str(ans["project"]).strip() if _answered(ans.get("project")) else "Cross-site purchase comparison"
+        tpl["project"] = scope["project"]
+        guess = (scope_prop or {}).get("reporting_currency")
+        if reporting_ans:
+            scope["reporting_currency"] = reporting_ans
+            recorded.append(f"reporting currency: {reporting_ans}")
+        else:
+            ask("reporting_currency", f"Which currency should prices be reported in? The files mostly use {guess}.", "reporting_currency", suggest=guess)
+        tpl["reporting_currency"] = reporting_ans or ASK
+        win = ans.get("window") if isinstance(ans.get("window"), dict) else {}
+        w0, w1 = (_iso(win.get("start")) if _answered(win.get("start")) else None), (_iso(win.get("end")) if _answered(win.get("end")) else None)
+        if w0 and w1 and w0 <= w1:
+            scope["window"] = {"start": w0, "end": w1}
+            recorded.append(f"window: {w0} to {w1}")
+        else:
+            ask("window", f"Which purchase dates should be compared (start and end, YYYY-MM-DD)? The files hold purchases from {scan_lo} to {scan_hi}. "
+                          "Use the client's agreed window, not just the range in the data.", "window", suggest={"start": scan_lo, "end": scan_hi})
+        tpl["window"] = {"start": w0 or ASK, "end": w1 or ASK}
+        if not (w0 and w1):
+            scope["window"] = {"start": scan_lo, "end": scan_hi}
+        fmts = ans.get("date_formats") if isinstance(ans.get("date_formats"), dict) else {}
+        tpl_fmts = {}
+        for need in base["needs"]:
+            if need["kind"] != "date_format":
+                continue
+            plant = need["ask"].split(" (", 1)[0]
+            chosen = fmts.get(plant)
+            tpl_fmts[plant] = chosen if _answered(chosen) else ASK
+            if _answered(chosen):
+                for entry in scope["files"]:
+                    if entry["plant"] == plant:
+                        entry["date_format"] = str(chosen)
+                recorded.append(f"{plant} date format: {chosen}")
+            else:
+                ask("date_format", need["ask"], f"date_formats.{plant}", options=need.get("options"))
+        if tpl_fmts:
+            tpl["date_formats"] = tpl_fmts
+        if not confirmed("scope", True):
+            ask("confirm_scope", "These plants and files will be compared: " + "; ".join(f"{e['plant']} ({e['file']})" for e in scope["files"]) + ". Is that right?", "confirm.scope")
+        else:
+            recorded.append("plants and files: confirmed")
+
+    # ---- rules -------------------------------------------------------------------------------
+    tables = {k: [dict(r) for r in rules["sections"].get(k, [])] for k in RULE_TABLES}
+    patch = base.get("rules_patch", {})
+    # Pack sizes
+    ups = ans.get("unit_pack_sizes") if isinstance(ans.get("unit_pack_sizes"), dict) else {}
+    ups_n = {_norm_unit(k): (k, v) for k, v in ups.items()}
+    tpl_units = {}
+    for need in [n for n in base["needs"] if n["kind"] == "unit_pack_size"]:
+        unit = need["unit"]
+        hit = ups_n.get(_norm_unit(unit))
+        if hit is None or (_answered(hit[1]) is False and hit[1] is not None):
+            tpl_units[unit] = ASK
+            ask("unit_pack_size", need["ask"], f"unit_pack_sizes.{unit}", unit=unit, hint=need.get("hint"))
+            continue
+        value = hit[1]
+        tpl_units[unit] = value
+        if value is None or (isinstance(value, str) and value.strip().lower() in _SKIP_WORDS):
+            tpl_units[unit] = None
+            recorded.append(f"unit '{unit}': pack size not known - left out, its lines go to Needs review")
+            continue
+        number = _positive_number(value)
+        if number is None:
+            tpl_units[unit] = ASK
+            ask("unit_pack_size", f"'{value}' is not a positive number. How many labels are in one '{unit}'?", f"unit_pack_sizes.{unit}", unit=unit)
+            continue
+        tables["unit_conversions"].append({"rule_id": f"UC-{len(tables['unit_conversions']) + 1:03d}", "unit_alias": unit, "plant": "*",
+                                           "labels_per_unit": _num_text(number), "note": f"Confirmed by {by}", "source": "user_confirmed"})
+        recorded.append(f"unit '{unit}': {_num_text(number)} labels")
+    if tpl_units:
+        tpl["unit_pack_sizes"] = tpl_units
+    # Exchange rates
+    fxs = ans.get("fx_rates") if isinstance(ans.get("fx_rates"), dict) else {}
+    tpl_fx = {}
+    reporting_final = (scope.get("reporting_currency") if isinstance(scope, dict) else None) or reporting_ans
+    for need in [n for n in base["needs"] if n["kind"] == "fx_rate"]:
+        cur = need["currency"]
+        a = fxs.get(cur) if isinstance(fxs.get(cur), dict) else {}
+        rate = _positive_number(a.get("rate")) if _answered(a.get("rate")) else None
+        as_of = _iso(a.get("as_of")) if _answered(a.get("as_of")) else None
+        tpl_fx[cur] = {"rate": _num_text(rate) if rate else ASK, "as_of": as_of or ASK, "note": a.get("note", "")}
+        if rate and as_of and reporting_final:
+            tables["fx_rates"].append({"rule_id": f"FX-{len(tables['fx_rates']) + 1:03d}", "currency": cur, "rate_to_reporting": _num_text(rate),
+                                       "reporting_currency": reporting_final, "as_of": as_of, "source_note": a.get("note") or f"Confirmed by {by}", "source": "user_confirmed"})
+            recorded.append(f"exchange rate {cur} to {reporting_final}: {_num_text(rate)} as of {as_of}")
+        else:
+            ask("fx_rate", need["ask"] + " Give the rate, its date (YYYY-MM-DD) and where it comes from.", f"fx_rates.{cur}", currency=cur)
+    if tpl_fx:
+        tpl["fx_rates"] = tpl_fx
+    # Freight terms and settings
+    settings = json.loads(json.dumps(rules["settings"])) if isinstance(rules["settings"], dict) else None
+    settings_new = settings is None
+    if settings_new:
+        settings = json.loads(json.dumps(DEFAULT_SETTINGS))
+    fr_in = ans.get("freight_terms") if isinstance(ans.get("freight_terms"), dict) else {}
+    tpl_fr = {}
+    for need in [n for n in base["needs"] if n["kind"] == "freight_term"]:
+        term = need["term"]
+        v = str(fr_in.get(term, "")).strip().lower()
+        if v in ("delivered", "ex-works"):
+            settings.setdefault("freight_groups", {})[term] = v
+            tpl_fr[term] = v
+            recorded.append(f"freight term {term}: {v}")
+        else:
+            tpl_fr[term] = ASK
+            ask("freight_term", need["ask"] + " Answer 'delivered' or 'ex-works'.", f"freight_terms.{term}", term=term)
+    if tpl_fr:
+        tpl["freight_terms"] = tpl_fr
+    if settings_new:
+        if confirmed("settings", True):
+            settings["source"] = "user_confirmed"
+            recorded.append("settings (price per 1,000 labels, order-size bands, freight groups): confirmed")
+        else:
+            settings["source"] = UNCONFIRMED
+            ask("confirm_settings", "Use the standard settings: price per 1,000 labels, orders under 100,000 labels count as 'small', standard Incoterm groups, at least 2 plants per comparison. OK?", "confirm.settings")
+    # Columns
+    columns = rules["columns"] if isinstance(rules["columns"], dict) else None
+    if columns is None:
+        col_prop = next((p["value"] for p in base["proposals"] if p["kind"] == "columns"), None)
+        columns = json.loads(json.dumps(col_prop)) if col_prop else {"required": DEFAULT_REQUIRED, "optional": DEFAULT_OPTIONAL, "aliases": {}}
+        pairs = "; ".join(f"{s['plant']}: " + ", ".join(f"'{h}' = {f}" for h, f in s["mapping"].items()) for s in base["scan"])
+        if confirmed("columns", True):
+            columns["source"] = "user_confirmed"
+            recorded.append("column mapping: confirmed")
+        else:
+            columns["source"] = UNCONFIRMED
+            ask("confirm_columns", f"The column headers map like this: {pairs}. Is that right?", "confirm.columns")
+    # Abbreviations
+    new_abbr = patch.get("abbreviations", [])
+    if new_abbr:
+        if confirmed("abbreviations", True):
+            for r in new_abbr:
+                tables["abbreviations"].append({"short": r["short"], "long": r["long"], "source": "user_confirmed"})
+            recorded.append("abbreviations: " + ", ".join(f"{r['short']} = {r['long']}" for r in new_abbr))
+        else:
+            ask("confirm_abbreviations", "These abbreviations look right: " + ", ".join(f"'{r['short']}' = '{r['long']}'" for r in new_abbr) + ". OK?", "confirm.abbreviations")
+    # Candidate products
+    if patch.get("specs"):
+        prod = ans.get("products") if isinstance(ans.get("products"), dict) else {}
+        approve = [str(x) for x in (prod.get("approve") or []) if _answered(x)]
+        leave = [str(x) for x in (prod.get("leave_out") or []) if _answered(x)]
+        hold = {(str(h.get("plant", "")).strip().lower(), _norm(h.get("description", ""))) for h in (prod.get("hold_for_gate2") or []) if isinstance(h, dict)}
+        spec_ids = [s["spec_id"] for s in patch["specs"]]
+        unknown = [x for x in approve + leave if x not in spec_ids]
+        if unknown:
+            ask("products", f"Unknown product id(s) {unknown}; the candidates are {spec_ids}.", "products")
+        open_ids = [s for s in spec_ids if s not in approve and s not in leave]
+        tpl["products"] = {"approve": approve, "leave_out": leave, "hold_for_gate2": [dict(plant=h["plant"], description=h["description"]) for h in (prod.get("hold_for_gate2") or []) if isinstance(h, dict)]}
+        if open_ids:
+            members = {}
+            for r in patch["item_map"]:
+                members.setdefault(r["spec_id"], []).append(f"{r['plant']}: '{r['description']}'")
+            lines = " | ".join(f"{sid} = " + "; ".join(members.get(sid, [])) for sid in open_ids)
+            ask("products", "Which of these candidate products are really the same item across plants (approve), and which should be left out? "
+                            "Name any single item you want a buyer to review at Gate 2 (hold). Candidates: " + lines, "products",
+                open_products=open_ids)
+        spec_name = {s["spec_id"]: s["spec_name"] for s in patch["specs"]}
+        for sid in spec_ids:
+            if sid in leave:
+                recorded.append(f"product {sid}: left out")
+                continue
+            if sid in approve:
+                tables["specs"].append({"spec_id": sid, "spec_name": spec_name[sid], "source": "user_confirmed"})
+                recorded.append(f"product {sid} ({spec_name[sid]}): approved by {by}")
+            else:
+                tables["specs"].append({"spec_id": sid, "spec_name": spec_name[sid], "source": UNCONFIRMED})
+            for r in [x for x in patch["item_map"] if x["spec_id"] == sid]:
+                key = (r["plant"].strip().lower(), _norm(r["description"]))
+                row = dict(r)
+                if sid in approve and key not in hold:
+                    row.update(status="approved", approved_by=by, source="user_confirmed")
+                elif sid in approve:
+                    row.update(status="proposed", approved_by="", source=UNCONFIRMED)
+                    recorded.append(f"'{r['description']}' ({r['plant']}): held for the buyer at Gate 2")
+                tables["item_map"].append(row)
+    if confirm_out:
+        tpl["confirm"] = confirm_out
+    pack = {"columns": columns, "settings": settings, **tables}
+    return {"questions": questions, "recorded": recorded, "blockers": blockers, "pack": pack, "scope": scope,
+            "template": tpl, "base": base}
+
+
+def setup():
+    """Gate 0, guided. Reads setup.json (if any) and the plant files; returns what is open, the template to fill, and finished files."""
+    try:
+        built = _build_setup()
+    except (WorkflowError, OSError, KeyError, TypeError, ValueError) as exc:
+        return {"status": "ERROR", "error": str(exc)}
+    qs = built["questions"]
+    out = {"skill": "cross-site-purchase-comparison", "version": VERSION, "mode": "setup",
+           "status": "SETUP_NEEDS_INPUT" if qs else "SETUP_READY",
+           "plain_summary": (f"{len(qs)} question(s) still open." if qs else "Everything is answered. rules.json and scope.json are built and tagged user_confirmed."),
+           "questions": qs, "recorded": built["recorded"], "setup_template": built["template"], "wrote_files": []}
+    if qs:
+        out["next_step"] = ("Ask ALL open questions in one message, in plain language. When the person answers, put every answer into setup.json "
+                            "(start from setup_template, write the whole file once) and run --mode setup once more.")
+        out["found"] = built["base"]["found"]
+        out["scan"] = built["base"]["scan"]
+    else:
+        out["files"] = {"rules.json": built["pack"], "scope.json": built["scope"]}
+        written = []
+        if _VFS is None:
+            os.makedirs(OUT_DIR, exist_ok=True)
+        for name, content in (("rules.json", built["pack"]), ("scope.json", built["scope"])):
+            _emit(os.path.join(OUT_DIR, name), json.dumps(content, indent=2, ensure_ascii=False) + "\n")
+            written.append(f"{OUT_DIR}/{name}")
+        out["wrote_files"] = written
+        out["next_step"] = ("Show the person rules.json and scope.json (print them and offer save_output_file for both). Ask: 'Is this right?'. "
+                            "When they confirm, write decisions.json with their Gate 1 confirmation and run --mode run once. Do not ask the questions again.")
     return out
 
 
@@ -1654,21 +2000,21 @@ def demo():
 
 def _has_staged_scope():
     found = _index(os.curdir)
-    return any(name in found for name in SCOPE_NAMES)
+    return any(name in found for name in SCOPE_NAMES) or "setup.json" in found
 
 
 def _parse_mode():
-    """Optional --mode {auto,demo,run,propose}; declared in scripts/manifest.json. Never used as a path."""
+    """Optional --mode {auto,demo,run,propose,setup}; declared in scripts/manifest.json. Never used as a path."""
     import argparse
     parser = argparse.ArgumentParser(description="Cross-site purchase comparison")
-    parser.add_argument("--mode", choices=("auto", "demo", "run", "propose"), default="auto")
+    parser.add_argument("--mode", choices=("auto", "demo", "run", "propose", "setup"), default="auto")
     return parser.parse_args().mode
 
 
 def main():
     mode = _parse_mode()
-    if mode == "propose":
-        result = propose()
+    if mode in ("propose", "setup"):
+        result = propose() if mode == "propose" else setup()
         print(json.dumps(_plain(result), indent=2, ensure_ascii=False))
         return 1 if result.get("status") == "ERROR" else 0
     try:

@@ -21,10 +21,10 @@ allowed-tools:
   - stage_blueprint_to_temp
   - stage_artifact_to_temp
 metadata:
-  version: 0.5.0
+  version: 0.6.0
 ---
 
-# cross-site-purchase-comparison (v0.5.0)
+# cross-site-purchase-comparison (v0.6.0)
 
 **Business question:** *Are different parts of the client paying different prices for the same thing, and which differences are worth investigating?*
 
@@ -39,7 +39,7 @@ Do **not** use it to claim achieved savings, to compare across specifications no
 
 ## Inputs (all are files; the skill contains no client data)
 
-**Only the plant CSVs are required to start.** If the client has no scope file or rules pack, run Gate 0 (below): the script reads the plant files, says what is missing, and proposes what it safely can. The person then answers in plain language and you write `scope.json` and `rules.json` for them.
+**Only the plant CSVs are required to start.** If the client has no scope file or rules pack, run Gate 0 (below): the script reads the plant files, says what is missing, and proposes what it safely can. The person then answers in plain language and the script builds `scope.json` and `rules.json` from their answers.
 
 | Input | What it is | Changes per client? |
 |---|---|---|
@@ -61,8 +61,8 @@ Templates and a worked example are in `examples/synthetic/`.
 
 ## How the script is run (Process Studio contract)
 
-- The script is `scripts/compare_prices.py`, declared in `scripts/manifest.json`. Only declared scripts and arguments are admitted; call it with **`run_skill_script`**. The one optional argument is `--mode` with the value `auto`, `demo`, `run` or `propose`. Declare nothing else: any other flag is rejected before the script starts.
-- It is deliberately **not** named `generate_*`, so it is never auto-run. You orchestrate it, and may call it several times in one turn (Gate 1, then DRAFT, then FINAL) with a person's decision in between.
+- The script is `scripts/compare_prices.py`, declared in `scripts/manifest.json`. Only declared scripts and arguments are admitted; call it with **`run_skill_script`**. The one optional argument is `--mode` with the value `auto`, `demo`, `run`, `propose` or `setup`. Declare nothing else: any other flag is rejected before the script starts.
+- It is deliberately **not** named `generate_*`, so it is never auto-run. You orchestrate it: **one call per turn**, with the person's reply in between (Gate 0 answers, Gate 1, DRAFT, FINAL).
 - The script runs with the run's temp folder as its working directory. **Files the user attached are already staged there**, named `uploaded_<original name>`, with `.txt` added to anything that is not `.md` or `.txt` (so `plant_A_purchases.csv` becomes `uploaded_plant_A_purchases.csv.txt`). The script understands those names. **Do not re-type or relay uploaded files with `write_temp_file`**: it is unreliable for anything you did not compose yourself.
 - The script prints one JSON result to stdout, and writes `out/run_report.json`, `out/opportunities.csv` and `out/needs_review.csv`. Quote its output; never paraphrase numbers.
 - Python standard library only. CSV input only.
@@ -72,7 +72,7 @@ Templates and a worked example are in `examples/synthetic/`.
 | Situation | Mode | What runs |
 |---|---|---|
 | The user wants to **see the skill work**, or has attached no files | **1. Built-in demo** | `run_skill_script` with `--mode demo`. Embedded synthetic data, nothing staged. |
-| The user attached plant CSVs but **no scope or no complete rules** (or rules in another form: a spreadsheet, an email, chat text) | **Gate 0: setup** | `run_skill_script` with `--mode propose`. Reads the files, writes nothing, returns what is missing. |
+| The user attached plant CSVs but **no scope or no complete rules** (or rules in another form: a spreadsheet, an email, chat text) | **Gate 0: setup** | `run_skill_script` with `--mode setup`. Reads the files, asks every open question at once, then builds `rules.json` and `scope.json` from the answers. |
 | The user attached scope, rules and plant CSVs | **2. Script run on their files** | `run_skill_script` with `--mode run`, after the steps below. |
 | The script cannot run at all (the platform blocks it) | **3. Chat-only review** | The assistant reads the uploads as text. **No script runs.** |
 
@@ -91,45 +91,63 @@ State clearly: **this is synthetic data, the savings are scenarios to confirm wi
 
 ## Gate 0: setup (when scope or rules are missing or in the wrong shape)
 
-Clients rarely hand over a tidy `rules.json`. Do not ask for one. Run `--mode propose` on whatever was attached: it works with only the plant CSVs, and with a partial or absent `scope.json` / `rules.json`. It **writes nothing** and returns:
+Clients rarely hand over a tidy `rules.json`. Do not ask for one, and do not write `rules.json` or `scope.json` yourself. **The script builds both from the person's answers.** Your job is to ask, record and show.
 
-- `status`: `GATE_0_NEEDS_INPUT` (something blocking is missing), `GATE_0_CONFIRM_PROPOSALS` (nothing blocking, but there are proposals to confirm) or `GATE_0_READY`.
-- `needs`: questions the data cannot answer. Each has `blocking`, a plain `ask`, and a `template_row` showing where the answer goes.
-- `proposals`: things the code can safely suggest, each marked `"source": "agent_proposed"`.
-- `rules_patch`: draft rows for `specs`, `item_map`, `spec_equivalences` (always empty) and `abbreviations`.
-- `found.rules_problems`: any attached rules section that has the wrong shape, named exactly. Tell the person; do not fix it silently.
+### The flow (smooth, one script run per turn)
 
-### What you may propose, and what you must ask
+**Turn 1 (person attaches plant CSVs).** Call `run_skill_script` with `--mode setup`. It writes nothing yet and returns:
+- `questions`: every open question, numbered, in plain language.
+- `setup_template`: the answer sheet, with `"<ask>"` where an answer goes.
+- `plain_summary`: one line to show the person.
 
-| Information | You may | Why |
-|---|---|---|
-| Column mapping | Propose; the person confirms | Header names are usually clear |
-| Scope: plants, date window, reporting currency | Propose from the files; the person confirms | Visible in the data |
-| Candidate products (grouped descriptions) | Propose; the person approves each | Pattern matching only |
-| Abbreviations ("Lbl" = label) | Propose; the person confirms | Low risk, still confirmed |
-| **Pack sizes** (labels per roll, per "M") | **Ask. Never fill in** | Nothing in the data states it. A wrong value gives wrong prices that look right |
-| **FX rates** | **Ask. Never fill in** | A rate is a source and a date, not a guess |
-| **Which specifications are equivalent** | **Ask. Never fill in** | A commercial decision; the table stays empty until a buyer approves |
-| Category name | Ask | Defines what is compared |
+Show **all** the questions in **one** message, as a numbered list, with the script's suggestion next to each where it gives one (for example "the unit name contains 500 - confirm?"). Say they can answer in any order and in plain words, and that "I don't know" is a valid answer. Do not ask one question per turn, and do not run the script again before the person replies.
 
-If the person says a value in chat ("a roll is 500 labels, use 1.08 for EUR"), accept it as their answer and record it as confirmed. If they upload rules in another form (a spreadsheet, a price list), read it with `read_temp_file` and map it into the sections yourself, then show the person what you built.
+**Turn 2 onwards (person answers).** For each answer they gave:
+1. Put it into `setup.json` (start from `setup_template`; keep earlier answers; change only what they just said). `setup.json` is short, so `write_temp_file` is safe. Read it back with `read_temp_file`.
+2. Call `run_skill_script` with `--mode setup` **once**.
+   - `SETUP_NEEDS_INPUT`: show `recorded` ("got it: ...") in a few words, then ask only the remaining `questions`, all together.
+   - `SETUP_READY`: the script has written `out/rules.json` and `out/scope.json`. Go to "Show the files" below.
+3. Never ask again something already in `recorded`.
 
-### How to turn answers into files
+**Show the files.** Print `files.rules.json` and `files.scope.json` from the result (or `read_temp_file` them) and call `save_output_file` for both, so the person can open them. Give a short summary: units and pack sizes, the FX rate and its date, the window, approved products, anything left out or held for Gate 2. Ask once: **"Is this right?"** If they change something, update `setup.json` and run `--mode setup` again. When they say yes, that is also their Gate 1 confirmation: write `decisions.json` with `{"gate1": {"confirmed": true, "by": "<their role>"}}` and go to Mode 2 step 4 (DRAFT run).
 
-1. Ask the blocking `needs` first, in plain language, one short batch at a time. Show each proposal and ask for a yes, a change or a no.
-2. Compose `scope.json` and `rules.json` (a few lines each is safe for `write_temp_file`; use the shapes in `examples/synthetic/scope_csv.json` and `rules.json`). Use the `template_row` from each need.
-3. **Tag every rule with its source.** Add `"source": "user_confirmed"` to a row only when the person agreed to it in this chat. Rows the person has not agreed to keep `"source": "agent_proposed"`.
-4. Read the files back with `read_temp_file`, then call `--mode propose` again to check the gaps closed. **One script run per turn**: write, check, run, then wait for the reply.
-5. When `status` is `GATE_0_READY` (or the person accepts the remaining proposals), go to Mode 2 below.
+### How answers go into `setup.json`
 
-**An `agent_proposed` rule can never reach FINAL.** The run report shows `rules_provenance` and a **Gate 0 open** entry listing each unconfirmed rule. FINAL stays a DRAFT until every rule is `user_confirmed`. Do not change a tag to get past it; ask the person.
+| Answer | Where |
+|---|---|
+| Their role | `confirmed_by` |
+| Category | `category` |
+| Reporting currency | `reporting_currency` |
+| Comparison window | `window.start`, `window.end` (YYYY-MM-DD) |
+| Pack size of a unit, e.g. "M is 1,000" | `unit_pack_sizes["M"] = 1000` |
+| "I don't know" for a unit | `unit_pack_sizes["ROLL"] = null` (its lines go to Needs review) |
+| FX rate | `fx_rates["EUR"] = {"rate": "1.08", "as_of": "2026-01-01", "note": "<where it is from>"}` |
+| Yes to scope, settings, column mapping, abbreviations | `confirm.scope`, `confirm.settings`, `confirm.columns`, `confirm.abbreviations` = `true` |
+| Change to a column mapping | `column_overrides["<Plant>"]["<header>"] = "<field>"` |
+| Products | `products.approve` (spec IDs), `products.leave_out` (spec IDs), `products.hold_for_gate2` (`{"plant", "description"}`) |
+
+**Every unit listed is a question, including `M`.** Ask about each one; never skip a unit because its name looks obvious.
+
+### Tags: why answered means confirmed
+
+The script tags every rule it builds from an answer in `setup.json` as `"source": "user_confirmed"`. You never set tags yourself. The one thing that stays `agent_proposed` is a match the person chose to **hold for Gate 2**; it becomes confirmed when they approve it there. So once Gate 0 is answered and the person says "this is right", the rules are final.
+
+Things you may suggest but must ask about (the person confirms or changes):
+- column mapping, scope, candidate products, abbreviations, standard settings.
+
+Things you must never fill in (only the person can say):
+- **pack sizes**, **FX rates**, **which specifications are equivalent**, the category.
+
+If the person states a value in chat ("a roll is 500 labels, use 1.08 for EUR"), that is their answer: record it. If they upload rules in another form (a spreadsheet, a price list), read it with `read_temp_file`, map it into `setup.json`, and show them what you recorded.
+
+`--mode propose` still exists: it returns the same scan as raw needs and proposals, for a person who wants to write their own rules pack. Prefer `--mode setup`.
 
 ## Mode 2: running the script on the user's files
 
 Ask the user to attach: one CSV per plant, the scope file, and the rules as one `rules.json`. Excel users must export to CSV first. Do not ask for a decisions file; you write it with the person at the gates.
 
 Steps, in order:
-1. **Find the staged files.** Call `list_temp_files`. Expect `uploaded_scope*.json(.txt)`, `uploaded_rules.json(.txt)` and one `uploaded_*.csv.txt` per plant. If the scope or the rules are missing or incomplete, do Gate 0 first; do not invent them. If two uploads share one original name, ask the user to attach it once.
+1. **Find the staged files.** Call `list_temp_files`. Expect `uploaded_scope*.json(.txt)`, `uploaded_rules.json(.txt)` and one `uploaded_*.csv.txt` per plant. If the scope or the rules are missing or incomplete, do Gate 0 first; do not invent them. After Gate 0, the script reads `setup.json` itself; no `rules.json` or `scope.json` upload is needed. If two uploads share one original name, ask the user to attach it once.
 2. **Gate 1 run.** Call `run_skill_script` with `--mode run` and no `decisions.json` present. Expect `STOPPED_AT_GATE_1`, with the open items listed (scope to confirm, column headers the skill does not recognise). Show them to the user.
 3. **Get Gate 1 from the person.** Ask them to confirm plants, category, window and reporting currency, and to map any unrecognised header. Then compose `decisions.json` yourself (a few lines, which is safe for `write_temp_file`) using the shape in `examples/synthetic/decisions_1_scope_confirmed.json`. Only write what the person actually said. Never confirm a gate for them.
 4. **DRAFT run.** Call `run_skill_script` with `--mode run` again. Show the opportunities, the Needs review list and the Gate 2 queue.
@@ -184,7 +202,7 @@ Use only if `run_skill_script` is blocked for this skill and the user agrees to 
 ## Ready for another client
 Change only: the plant exports, `scope.json`, the rules pack (headers, specifications and item map, unit conversions, FX, bands) and `decisions.json`. No code changes. Replace the synthetic rules with the client's; never put client data in this folder.
 
-## Limits of v0.5.0 (be honest with the client)
+## Limits of v0.6.0 (be honest with the client)
 - One category (packaging labels), one price basis (per 1,000 labels), CSV input only. Excel files must be exported to CSV first.
 - Savings are scenarios. They don't confirm that a price is available at another plant's volume, location or terms. A buyer must confirm.
 - Column mapping uses exact aliases plus a person; there is no fuzzy header guessing.
