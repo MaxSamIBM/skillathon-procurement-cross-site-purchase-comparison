@@ -1,4 +1,4 @@
-# cross-site-purchase-comparison (v0.6.0)
+# cross-site-purchase-comparison (v0.7.0)
 
 CSV-first workflow to compare prices for the same approved packaging specifications across plants. It preserves source reconciliation, explicit rules, approved-equivalence controls and human gates. Results are scenarios for buyer review, not achieved or guaranteed savings.
 

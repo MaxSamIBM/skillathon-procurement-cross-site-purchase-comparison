@@ -21,10 +21,10 @@ allowed-tools:
   - stage_blueprint_to_temp
   - stage_artifact_to_temp
 metadata:
-  version: 0.6.0
+  version: 0.7.0
 ---
 
-# cross-site-purchase-comparison (v0.6.0)
+# cross-site-purchase-comparison (v0.7.0)
 
 **Business question:** *Are different parts of the client paying different prices for the same thing, and which differences are worth investigating?*
 
@@ -91,25 +91,62 @@ State clearly: **this is synthetic data, the savings are scenarios to confirm wi
 
 ## Gate 0: setup (when scope or rules are missing or in the wrong shape)
 
-Clients rarely hand over a tidy `rules.json`. Do not ask for one, and do not write `rules.json` or `scope.json` yourself. **The script builds both from the person's answers.** Your job is to ask, record and show.
+Clients rarely hand over a tidy `rules.json`. Do not ask for one, and do not write `rules.json` or `scope.json` yourself. **The script builds both from the person's answers.** Your job is to ask, record, show and keep the case visible.
 
-### The flow (smooth, one script run per turn)
+What the person wants: a smooth conversation, the four plant files treated as the case from start to finish, full transparency, and once they approve the rules and scope those files are official for every later gate.
 
-**Turn 1 (person attaches plant CSVs).** Call `run_skill_script` with `--mode setup`. It writes nothing yet and returns:
-- `questions`: every open question, numbered, in plain language.
-- `setup_template`: the answer sheet, with `"<ask>"` where an answer goes.
-- `plain_summary`: one line to show the person.
+### The case card: print it at the end of every reply
 
-Show **all** the questions in **one** message, as a numbered list, with the script's suggestion next to each where it gives one (for example "the unit name contains 500 - confirm?"). Say they can answer in any order and in plain words, and that "I don't know" is a valid answer. Do not ask one question per turn, and do not run the script again before the person replies.
+Every script result has a `case_card_text` field. **Paste it verbatim at the bottom of every reply while the case is open**, under the heading "Case card". It names the four plant files with a fingerprint each, the Gate 0 state, every answer recorded so far, and every later decision. The chat is the case's memory: the working folder can be emptied between turns, but the case card in the chat can always rebuild it. Never shorten it, never reword it.
 
-**Turn 2 onwards (person answers).** For each answer they gave:
-1. Put it into `setup.json` (start from `setup_template`; keep earlier answers; change only what they just said). `setup.json` is short, so `write_temp_file` is safe. Read it back with `read_temp_file`.
-2. Call `run_skill_script` with `--mode setup` **once**.
-   - `SETUP_NEEDS_INPUT`: show `recorded` ("got it: ...") in a few words, then ask only the remaining `questions`, all together.
-   - `SETUP_READY`: the script has written `out/rules.json` and `out/scope.json`. Go to "Show the files" below.
-3. Never ask again something already in `recorded`.
+The result's `case_card` object also carries `setup_json_to_restore` and `decisions_json_to_restore`. If a file is missing on a later turn, rebuild it from the most recent case card in the chat (see "Do not rely on earlier turns").
 
-**Show the files.** Print `files.rules.json` and `files.scope.json` from the result (or `read_temp_file` them) and call `save_output_file` for both, so the person can open them. Give a short summary: units and pack sizes, the FX rate and its date, the window, approved products, anything left out or held for Gate 2. Ask once: **"Is this right?"** If they change something, update `setup.json` and run `--mode setup` again. When they say yes, that is also their Gate 1 confirmation: write `decisions.json` with `{"gate1": {"confirmed": true, "by": "<their role>"}}` and go to Mode 2 step 4 (DRAFT run).
+### The flow: four steps, no dead ends
+
+**Step 1: scan and ask (turn 1, person attaches the four plant CSVs).** Call `run_skill_script` with `--mode setup`. It writes nothing. Show:
+- one line per plant file: name, rows read, headers recognised (from `plain_summary` and `files`);
+- **all** `questions` in one numbered list, with the script's suggestion beside each ("the name contains 500: confirm?"). Tell them they can answer in any order and in plain words, and "I don't know" is a valid answer;
+- the case card.
+
+Do not ask one question per turn. Do not run the script again before they reply. Every unit in the files is a question, including `M`.
+
+**Step 2: record and continue (each reply).** Put each answer into `setup.json` (start from `setup_template` or the last case card's `setup_json_to_restore`; keep earlier answers; change only what they just said). Write it with `write_temp_file` (it is short), read it back with `read_temp_file`, then call `run_skill_script` with `--mode setup` **once**.
+- `SETUP_NEEDS_INPUT`: say "Got it:" plus `recorded` in a few words, ask only the remaining `questions` together, add the case card.
+- `SETUP_READY`: go to step 3 in this same reply.
+
+**Step 3: show the files and ask for approval.** `SETUP_READY` means the script has written `out/rules.json` and `out/scope.json`. In the **same reply**:
+1. Print `files["rules.json"]` and `files["scope.json"]` from the result **in full, in the chat**, in code blocks. Do not rely on a download link: saving can fail. Also call `save_output_file` for both; if that errors, say so in one sentence and carry on, because the chat copy is already the record.
+2. Give a short plain summary: pack sizes per unit, the FX rate with its date and source, the window, the products approved, anything left out or held for Gate 2, and which rules are `user_confirmed`.
+3. Ask exactly: **"Do you approve these as the official rules and scope for this case? Say yes, or tell me what to change."**
+4. Add the case card.
+
+If they want a change, update `setup.json`, run `--mode setup` again and repeat step 3.
+
+**Step 4: approve and run, in the same turn.** When they say yes:
+1. Open `setup.json`, add the key `"approval"` with the value of `approval_template` from the last `SETUP_READY` result, **copied exactly, changing nothing**. If you no longer have that result, run `--mode setup` first, **in a turn of its own**, then do this step in the next turn.
+2. Read `setup.json` back with `read_temp_file`.
+3. Call `run_skill_script` with `--mode run` **once**. Do **not** write `decisions.json` for Gate 1: the approval **is** the Gate 1 confirmation, and the result shows `Gate 1 ... via Gate 0 approval`.
+4. Show the DRAFT result as in Mode 2 step 4, then the case card.
+
+From now on **the approved `rules.json` and `scope.json` are official**. The script checks the approval hash on every run. If an answer in `setup.json` or a plant file changes after approval, the run stops at Gate 0 and names what differs. Tell the person plainly what changed and ask whether to re-approve. Never edit the approval yourself and never invent one.
+
+### Gates 1 to 3 after approval
+
+- **Gate 1 is already done** by the approval.
+- **Gate 2:** show each held match with its source row. When the person decides, write `decisions.json` with only `match_decisions` (shape in `examples/synthetic/decisions_2_signed_off.json`), read it back, run once.
+- **Gate 3:** only when the person explicitly signs off, add `"gate3": {"approved": true, "by": "<role>"}`, read back, run once. Then call `save_output_file` for `out/opportunities.csv`, `out/needs_review.csv` and `out/run_report.json`. If saving fails, print the CSVs in the chat.
+
+After every run, quote the script's numbers exactly and finish with the case card, so every reply shows which files and which decisions the numbers rest on.
+
+### Do not rely on earlier turns (the working folder can be empty)
+
+On some turns the working folder is empty: the earlier uploads and even `setup.json` are gone. The chat is the only memory.
+
+- **At the start of every turn that runs the script**, call `list_temp_files` and read the real result. Never say a file is present or missing without that call.
+- **If `setup.json` is missing**, rebuild it from the latest case card in the chat (`setup_json_to_restore`, including the `approval` block if one exists). Do not re-ask the person anything. Read it back.
+- **If `decisions.json` is missing**, rebuild it from `decisions_json_to_restore` the same way.
+- **If the plant files are missing**, say so in one plain sentence, ask the person to attach the four CSVs again, and stop. Do not re-type or relay the uploads with `write_temp_file`, and do not run the script. Once they are attached again the script compares their fingerprints with the approved ones: identical files continue without any re-approval.
+- **When you ask the person for a reply** that needs a script run, remind them to attach the plant CSVs with it.
 
 ### How answers go into `setup.json`
 
@@ -125,29 +162,22 @@ Show **all** the questions in **one** message, as a numbered list, with the scri
 | Yes to scope, settings, column mapping, abbreviations | `confirm.scope`, `confirm.settings`, `confirm.columns`, `confirm.abbreviations` = `true` |
 | Change to a column mapping | `column_overrides["<Plant>"]["<header>"] = "<field>"` |
 | Products | `products.approve` (spec IDs), `products.leave_out` (spec IDs), `products.hold_for_gate2` (`{"plant", "description"}`) |
-
-**Every unit listed is a question, including `M`.** Ask about each one; never skip a unit because its name looks obvious.
+| Approval of the built files | `approval` (copied from `approval_template`, step 4 only) |
 
 ### Tags: why answered means confirmed
 
-The script tags every rule it builds from an answer in `setup.json` as `"source": "user_confirmed"`. You never set tags yourself. The one thing that stays `agent_proposed` is a match the person chose to **hold for Gate 2**; it becomes confirmed when they approve it there. So once Gate 0 is answered and the person says "this is right", the rules are final.
+The script tags every rule it builds from an answer as `"source": "user_confirmed"`. You never set tags. The one thing that stays `agent_proposed` is a match the person chose to **hold for Gate 2**; it becomes confirmed when they approve it there. So after the person approves at step 4, every rule built from their answers is final and factual.
 
-Things you may suggest but must ask about (the person confirms or changes):
-- column mapping, scope, candidate products, abbreviations, standard settings.
+You may suggest but must ask about: column mapping, scope, candidate products, abbreviations, standard settings. You must never fill in: **pack sizes**, **FX rates**, **which specifications are equivalent**, the category. If the person states a value in chat ("a roll is 500 labels, use 1.08 for EUR"), that is their answer: record it. If they upload rules in another form (a spreadsheet, a price list), read it with `read_temp_file`, map it into `setup.json`, and show them what you recorded.
 
-Things you must never fill in (only the person can say):
-- **pack sizes**, **FX rates**, **which specifications are equivalent**, the category.
-
-If the person states a value in chat ("a roll is 500 labels, use 1.08 for EUR"), that is their answer: record it. If they upload rules in another form (a spreadsheet, a price list), read it with `read_temp_file`, map it into `setup.json`, and show them what you recorded.
-
-`--mode propose` still exists: it returns the same scan as raw needs and proposals, for a person who wants to write their own rules pack. Prefer `--mode setup`.
+`--mode propose` still exists as a raw scan. Prefer `--mode setup`.
 
 ## Mode 2: running the script on the user's files
 
 Ask the user to attach: one CSV per plant, the scope file, and the rules as one `rules.json`. Excel users must export to CSV first. Do not ask for a decisions file; you write it with the person at the gates.
 
 Steps, in order:
-1. **Find the staged files.** Call `list_temp_files`. Expect `uploaded_scope*.json(.txt)`, `uploaded_rules.json(.txt)` and one `uploaded_*.csv.txt` per plant. If the scope or the rules are missing or incomplete, do Gate 0 first; do not invent them. After Gate 0, the script reads `setup.json` itself; no `rules.json` or `scope.json` upload is needed. If two uploads share one original name, ask the user to attach it once.
+1. **Find the staged files.** Call `list_temp_files`. Expect `uploaded_scope*.json(.txt)`, `uploaded_rules.json(.txt)` and one `uploaded_*.csv.txt` per plant. If the scope or the rules are missing or incomplete, do Gate 0 first; do not invent them. After Gate 0 approval the script reads `setup.json` itself; no `rules.json` or `scope.json` upload is needed, and steps 2 and 3 below are skipped because the approval is the Gate 1 confirmation. If two uploads share one original name, ask the user to attach it once.
 2. **Gate 1 run.** Call `run_skill_script` with `--mode run` and no `decisions.json` present. Expect `STOPPED_AT_GATE_1`, with the open items listed (scope to confirm, column headers the skill does not recognise). Show them to the user.
 3. **Get Gate 1 from the person.** Ask them to confirm plants, category, window and reporting currency, and to map any unrecognised header. Then compose `decisions.json` yourself (a few lines, which is safe for `write_temp_file`) using the shape in `examples/synthetic/decisions_1_scope_confirmed.json`. Only write what the person actually said. Never confirm a gate for them.
 4. **DRAFT run.** Call `run_skill_script` with `--mode run` again. Show the opportunities, the Needs review list and the Gate 2 queue.
@@ -202,7 +232,7 @@ Use only if `run_skill_script` is blocked for this skill and the user agrees to 
 ## Ready for another client
 Change only: the plant exports, `scope.json`, the rules pack (headers, specifications and item map, unit conversions, FX, bands) and `decisions.json`. No code changes. Replace the synthetic rules with the client's; never put client data in this folder.
 
-## Limits of v0.6.0 (be honest with the client)
+## Limits of v0.7.0 (be honest with the client)
 - One category (packaging labels), one price basis (per 1,000 labels), CSV input only. Excel files must be exported to CSV first.
 - Savings are scenarios. They don't confirm that a price is available at another plant's volume, location or terms. A buyer must confirm.
 - Column mapping uses exact aliases plus a person; there is no fuzzy header guessing.

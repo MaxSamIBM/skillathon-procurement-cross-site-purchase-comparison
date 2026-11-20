@@ -94,23 +94,139 @@ class Setup(unittest.TestCase):
         self.assertEqual(r["status"], "SETUP_NEEDS_INPUT")
         self.assertIn("ROLL-500", " ".join(q["ask"] for q in r["questions"]))
 
-    def test_end_to_end_to_final_without_uploading_rules_or_scope(self):
+    def approve(self, d):
+        """Gate 0 as the agent does it: build the files, then copy the approval token into setup.json unchanged."""
+        write(d, "setup.json", self.answered(d))
+        r = run(d, "setup")
+        self.assertEqual(r["status"], "SETUP_READY", r.get("questions"))
+        tpl = json.load(open(os.path.join(d, "setup.json")))
+        tpl["approval"] = r["approval_template"]
+        write(d, "setup.json", tpl)
+        return r
+
+    def test_unapproved_setup_stops_at_gate_0(self):
         d = self.folder()
         write(d, "setup.json", self.answered(d))
         self.assertEqual(run(d, "setup")["status"], "SETUP_READY")
-        write(d, "decisions.json", {"gate1": {"confirmed": True, "by": ROLE}})
-        draft = run(d, "run")
+        write(d, "decisions.json", {"gate1": {"confirmed": True, "by": ROLE}})  # gate 1 alone is not enough
+        r = run(d, "run")
+        self.assertEqual(r["status"], "STOPPED_AT_GATE_0", r)
+        self.assertEqual(r["opportunities"] if "opportunities" in r else [], [])
+
+    def test_end_to_end_to_final_without_uploading_rules_or_scope(self):
+        d = self.folder()
+        ready = self.approve(d)
+        self.assertIn("rules_sha256", ready["approval_template"])
+        draft = run(d, "run")  # no decisions.json at all: Gate 0 approval is the Gate 1 confirmation
         self.assertEqual(draft["status"], "DRAFT", draft)
+        gates = {g["gate"]: g for g in draft["gates"]}
+        self.assertEqual(gates["Gate 0"]["status"], "approved")
+        self.assertEqual(gates["Gate 1"]["via"], "Gate 0 approval")
         self.assertEqual(draft["opportunities"][0]["scenario_saving"], "20000.00")
-        # the unit/FX rules the person answered are confirmed facts, so they do not hold the run open
-        self.assertFalse([g for g in draft.get("gate0_open", []) if "unit" in g.lower() or "fx" in g.lower()])
+        self.assertEqual(draft["inputs"]["gate0"]["approved_by"], ROLE)
+        self.assertTrue(os.path.isfile(os.path.join(d, "out", "rules.json")))
         write(d, "decisions.json", {
-            "gate1": {"confirmed": True, "by": ROLE},
             "match_decisions": [{"plant": "Plant D", "description": "Lbl wht spec X", "decision": "approve", "by": ROLE}],
             "gate3": {"approved": True, "by": "Procurement lead"}})
         final = run(d, "run")
         self.assertEqual(final["status"], "FINAL", final)
         self.assertEqual([o["scenario_saving"] for o in final["opportunities"]], ["20000.00", "2112.00"])
+
+    def test_changed_answer_after_approval_reopens_gate_0(self):
+        d = self.folder()
+        self.approve(d)
+        tpl = json.load(open(os.path.join(d, "setup.json")))
+        tpl["unit_pack_sizes"]["M"] = 500  # someone edits an answer after approving
+        write(d, "setup.json", tpl)
+        r = run(d, "run")
+        self.assertEqual(r["status"], "STOPPED_AT_GATE_0")
+        self.assertTrue(any("changed after they were approved" in g for g in r["gate0_open"]), r["gate0_open"])
+
+    def test_edited_plant_file_after_approval_reopens_gate_0(self):
+        d = self.folder()
+        self.approve(d)
+        path = os.path.join(d, "plant_A_purchases.csv")
+        with open(path, "a") as f:
+            f.write("\n")
+        r = run(d, "run")
+        self.assertEqual(r["status"], "STOPPED_AT_GATE_0")
+        self.assertTrue(any("plant_A_purchases.csv" in g and "differs" in g for g in r["gate0_open"]), r["gate0_open"])
+
+    def test_missing_plant_file_after_approval_is_named(self):
+        d = self.folder()
+        self.approve(d)
+        os.remove(os.path.join(d, "plant_B_export.csv"))
+        r = run(d, "run")
+        self.assertEqual(r["status"], "STOPPED_AT_GATE_0", r)
+        self.assertTrue(any("plant_B_export.csv" in g and "not attached" in g for g in r["gate0_open"]), r["gate0_open"])
+
+    def test_forged_approval_hash_is_refused(self):
+        d = self.folder()
+        self.approve(d)
+        tpl = json.load(open(os.path.join(d, "setup.json")))
+        tpl["approval"]["rules_sha256"] = "0" * 64
+        write(d, "setup.json", tpl)
+        self.assertEqual(run(d, "run")["status"], "STOPPED_AT_GATE_0")
+
+    def test_approval_without_a_name_is_refused(self):
+        d = self.folder()
+        self.approve(d)
+        tpl = json.load(open(os.path.join(d, "setup.json")))
+        tpl["approval"]["by"] = ""
+        write(d, "setup.json", tpl)
+        self.assertEqual(run(d, "run")["status"], "STOPPED_AT_GATE_0")
+
+    def test_case_card_names_every_plant_and_every_answer(self):
+        d = self.folder()
+        self.approve(d)
+        r = run(d, "run")
+        txt = r["case_card_text"]
+        for needle in ("plant_A_purchases.csv", "plant_B_export.csv", "plant_C_report.csv", "plant_D_extract.csv",
+                       "approved by", "unit 'M': 1000 labels", "exchange rate EUR to USD: 1.08"):
+            self.assertIn(needle, txt)
+        self.assertEqual(len(r["case_card"]["plant_files"]), 4)
+        self.assertEqual(r["case_card"]["setup_json_to_restore"]["unit_pack_sizes"]["M"], 1000)
+
+    def test_setup_mode_prints_a_case_card_with_the_plant_files(self):
+        d = self.folder()
+        r = run(d, "setup")
+        self.assertIn("plant_D_extract.csv", r["case_card_text"])
+        self.assertIn("Open questions: ", r["case_card_text"])
+
+    def test_wiped_folder_is_rebuilt_from_the_case_card_and_stays_approved(self):
+        d = self.folder()
+        self.approve(d)
+        card = run(d, "run")["case_card"]
+        restore_setup, restore_decisions = card["setup_json_to_restore"], card["decisions_json_to_restore"]
+        self.assertIn("approval", restore_setup)
+        fresh = self.folder()  # new, empty working folder: only the re-attached plant files and what the chat remembered
+        write(fresh, "setup.json", restore_setup)
+        write(fresh, "decisions.json", restore_decisions)
+        again = run(fresh, "run")
+        self.assertEqual(again["status"], "DRAFT", again)
+        self.assertEqual(again["opportunities"][0]["scenario_saving"], "20000.00")
+
+    def test_platform_style_uploaded_names_work_through_gate_0(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        for n in PLANTS:
+            shutil.copy(os.path.join(EX, "inputs_csv", n), os.path.join(d, "uploaded_" + n + ".txt"))
+        self.approve(d)
+        r = run(d, "run")
+        self.assertEqual(r["status"], "DRAFT", r)
+        self.assertIn("plant_A_purchases.csv", r["case_card_text"])
+
+    def test_supplied_rules_and_scope_still_work_without_setup(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        for n in PLANTS:
+            shutil.copy(os.path.join(EX, "inputs_csv", n), d)
+        shutil.copy(os.path.join(EX, "rules.json"), d)
+        shutil.copy(os.path.join(EX, "scope_csv.json"), d)
+        shutil.copy(os.path.join(EX, "decisions_1_scope_confirmed.json"), d)
+        r = run(d, "run")
+        self.assertEqual(r["status"], "DRAFT", r)
+        self.assertEqual(r["case_card"]["gate0"], "not used (rules and scope were supplied)")
 
     def test_window_is_the_one_the_person_gave(self):
         d = self.folder()

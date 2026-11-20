@@ -21,7 +21,7 @@ import sys
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 RULE_FILES = ("columns.json", "settings.json", "specs.csv", "item_map.csv",
               "spec_equivalences.csv", "abbreviations.csv", "unit_conversions.csv", "fx_rates.csv")
 RULES_FILE = "rules.json"
@@ -136,16 +136,13 @@ def _find_setup():
 
 
 def _load_scope():
-    """scope.json if attached, otherwise the scope built from setup.json."""
-    try:
-        return _json(_find_scope(), "scope")
-    except WorkflowError as e:
-        if "not found" in str(e) and _find_setup():
-            built = _build_setup()
-            if built["questions"]:
-                raise WorkflowError(f"setup.json is incomplete: {len(built['questions'])} question(s) still open. Run --mode setup.")
-            return built["scope"]
-        raise
+    """The scope built from setup.json when setup.json is present (one source of truth), otherwise scope.json."""
+    if _find_setup():
+        built = _build_setup()
+        if built["questions"]:
+            raise WorkflowError(f"setup.json is incomplete: {len(built['questions'])} question(s) still open. Run --mode setup.")
+        return built["scope"]
+    return _json(_find_scope(), "scope")
 
 
 def _find_rules_file():
@@ -736,10 +733,75 @@ def _produce(out_dir, report, lines, opportunities, queue, g1):
         if ln["outcome"] in ("Needs review", "Excluded", "Not compared"):
             review.append({"type": ln["outcome"], "plant": ln["plant"], "source": _rowref(ln), "description": ln["description"],
                            "reason": "; ".join(ln["issues"]), "next_action": "Fix source or rules and rerun" if ln["outcome"] == "Needs review" else "Informational"})
+    for item in report.get("gate0_open", []):
+        review.append({"type": "Gate 0", "plant": "", "source": "", "description": "", "reason": item, "next_action": "Show rules.json and scope.json and record the approval"})
     for item in report.get("gate1_open", []):
         review.append({"type": "Gate 1", "plant": "", "source": "", "description": "", "reason": item, "next_action": "Confirm scope and mappings in decisions.json"})
     _write_csv(os.path.join(out_dir, "needs_review.csv"), ["type", "plant", "source", "description", "reason", "next_action"], review)
     _emit(os.path.join(out_dir, "run_report.json"), json.dumps(_plain(report), indent=2, ensure_ascii=False) + "\n")
+
+
+def _sha_obj(obj):
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _case_text(plants, gate0, rules12, scope12, recorded, open_questions, decisions=None):
+    """The case card as plain text. The agent prints it verbatim at the end of every reply, so the chat itself holds the whole case."""
+    rows = [f"  - {x['plant']}: {x['file']} | {x['rows']} rows | fingerprint {x['sha256_12']}" for x in plants] or ["  - (no plant files attached)"]
+    out = [f"CASE CARD (skill v{VERSION})", "Plant files on this case:", *rows,
+           f"Gate 0 (rules and scope): {gate0}" + (f" | rules {rules12} | scope {scope12}" if rules12 else ""),
+           f"Open questions: {open_questions}", "Answers recorded:"]
+    out += [f"  - {r}" for r in recorded] or ["  - (none yet)"]
+    d = decisions or {}
+    gates = []
+    if d.get("gate1", {}).get("confirmed"): gates.append(f"Gate 1 by {d['gate1'].get('by', '?')}")
+    for m in d.get("match_decisions", []) or []:
+        if isinstance(m, dict): gates.append(f"Gate 2: {m.get('plant', '?')} '{m.get('description', '?')}' {m.get('decision', '?')} by {m.get('by', '?')}")
+    if d.get("gate3", {}).get("approved"): gates.append(f"Gate 3 signed by {d['gate3'].get('by', '?')}")
+    out.append("Later decisions: " + ("; ".join(gates) if gates else "none yet"))
+    return "\n".join(out)
+
+
+def _plant_card(scan_rows):
+    idx = _index(_input_dir())
+    return [{"plant": r["plant"], "file": r["file"], "rows": r["rows"], "sha256_12": _hash(idx[r["file"]])[:12]} for r in scan_rows if r.get("file") in idx]
+
+
+def _input_dir():
+    return INPUT_DIR if (os.path.isdir(INPUT_DIR) and not os.path.islink(INPUT_DIR)) else os.curdir
+
+
+def _scope_plant_hashes(scope):
+    """sha256 of each plant file named in the scope that is present now. Names are only looked up in the folder listing."""
+    idx = _index(_input_dir())
+    return {item["file"]: _hash(idx[item["file"]]) for item in scope.get("files", []) if item.get("file") in idx}
+
+
+def _approval_token(pack, scope, plant_hashes):
+    return {"rules_sha256": _sha_obj(pack), "scope_sha256": _sha_obj(scope), "plant_files": dict(sorted(plant_hashes.items()))}
+
+
+def _check_approval(built, plant_hashes):
+    """Gate 0. Returns (approver or None, [what is open]). The approval is bound to the exact rules, scope and plant files."""
+    ans = _setup_answers().get("approval")
+    if not isinstance(ans, dict) or ans.get("approved") is not True:
+        return None, ["Gate 0 not approved: show the person rules.json and scope.json built from their answers, then record their approval in setup.json"]
+    by = str(ans.get("by", "")).strip()
+    if not by:
+        return None, ["Gate 0 approval has no 'by' (the approver's role)"]
+    now = _approval_token(built["pack"], built["scope"], plant_hashes)
+    problems = []
+    if ans.get("rules_sha256") != now["rules_sha256"] or ans.get("scope_sha256") != now["scope_sha256"]:
+        problems.append("The rules or scope changed after they were approved. Run --mode setup, show the new files and ask for approval again")
+    old = ans.get("plant_files") if isinstance(ans.get("plant_files"), dict) else {}
+    for name in sorted(set(old) | set(now["plant_files"])):
+        if name not in now["plant_files"]:
+            problems.append(f"Plant file {name} was approved but is not attached now. Attach it again")
+        elif name not in old:
+            problems.append(f"Plant file {name} was not part of the approved set")
+        elif old[name] != now["plant_files"][name]:
+            problems.append(f"Plant file {name} is not the file that was approved (its content differs)")
+    return (None, problems) if problems else (by, [])
 
 
 def _run():
@@ -787,13 +849,42 @@ def _run():
                          "rules_sha256": rules["fingerprints"]},
               "rules_provenance": rules["provenance"],
               "files": [{k: f[k] for k in ("plant", "file", "header_row", "mapping", "mapping_basis", "unmapped", "missing", "errors", "reconciliation")} for f in files]}
+    lines = [ln for f in files for ln in f["rows"]]
+    approval_by, gate0_open, built_setup = None, [], None
+    if _VFS is None and _find_setup():
+        built_setup = _build_setup()
+        approval_by, gate0_open = _check_approval(built_setup, _scope_plant_hashes(built_setup["scope"]))
+        report["inputs"]["gate0"] = {"source": SETUP_NAME, "approved_by": approval_by or "",
+                                     "rules_sha256": _sha_obj(built_setup["pack"]), "scope_sha256": _sha_obj(built_setup["scope"])}
+        if approval_by:
+            for fname, content in (("rules.json", built_setup["pack"]), ("scope.json", built_setup["scope"])):
+                _emit(os.path.join(OUT_DIR, fname), json.dumps(content, indent=2, ensure_ascii=False) + "\n")
+    report["case_card"] = {
+        "plant_files": [{"plant": x["plant"], "file": x["file"], "sha256_12": _hash(p)[:12], "rows_loaded": x["reconciliation"]["rows_loaded"],
+                         "loaded_amount": x["reconciliation"]["loaded_amount"], "total_check": x["reconciliation"]["total_check"]}
+                        for x, p in zip(files, resolved)],
+        "gate0": ("approved by " + approval_by) if approval_by else ("open" if built_setup is not None else "not used (rules and scope were supplied)"),
+        "rules_sha256_12": (_sha_obj(built_setup["pack"])[:12] if built_setup is not None else ""),
+        "scope_sha256_12": (_sha_obj(built_setup["scope"])[:12] if built_setup is not None else ""),
+        "answers_recorded": built_setup["recorded"] if built_setup is not None else [],
+        "decisions_on_file": decisions,
+        "setup_json_to_restore": _setup_answers() if built_setup is not None else None,
+        "decisions_json_to_restore": decisions}
+    report["case_card_text"] = _case_text(
+        [{"plant": c["plant"], "file": c["file"], "rows": c["rows_loaded"], "sha256_12": c["sha256_12"]} for c in report["case_card"]["plant_files"]],
+        report["case_card"]["gate0"], report["case_card"]["rules_sha256_12"], report["case_card"]["scope_sha256_12"],
+        report["case_card"]["answers_recorded"], 0, decisions)
+    if gate0_open:
+        report.update(status="STOPPED_AT_GATE_0", gate0_open=gate0_open, counts={"lines_loaded": len(lines)})
+        _produce(OUT_DIR, report, lines, [], [], True)
+        return report
     gate1 = []
     for f in files:
         if f["errors"]: gate1.append(f"{f['plant']} ({f['file']}): " + "; ".join(f["errors"]))
         if f["missing"]: gate1.append(f"{f['plant']} ({f['file']}): required fields {f['missing']} missing; unrecognized headers: {f['unknown']}")
-    if not decisions.get("gate1", {}).get("confirmed"):
+    gate1_by = approval_by or (decisions.get("gate1", {}).get("by") if decisions.get("gate1", {}).get("confirmed") else None)
+    if not gate1_by:
         gate1.append(f"Scope not confirmed: confirm plants, category '{scope.get('category', '')}', window {start} to {end}, currency {scope['reporting_currency']}")
-    lines = [ln for f in files for ln in f["rows"]]
     if gate1:
         report.update(status="STOPPED_AT_GATE_1", gate1_open=gate1, counts={"lines_loaded": len(lines)})
         _produce(OUT_DIR, report, lines, [], [], True)
@@ -824,10 +915,13 @@ def _run():
         gate3 = decisions.get("gate3", {})
         unconfirmed = rules["unconfirmed"]
         report["status"] = "FINAL" if not queue and not unconfirmed and gate3.get("approved") else "DRAFT"
-        report["gates"] = [{"gate": "Gate 1", "status": "confirmed", "by": decisions.get("gate1", {}).get("by", "unnamed")},
+        report["gates"] = [{"gate": "Gate 1", "status": "confirmed", "by": gate1_by or "unnamed", "via": "Gate 0 approval" if approval_by else "decisions.json"},
                            {"gate": "Gate 2", "status": "open" if queue else "resolved", "pending_matches": len(queue)},
                            {"gate": "Gate 3", "status": "approved" if report["status"] == "FINAL" else "open", "by": gate3.get("by", "")}]
-        if unconfirmed:
+        if approval_by:
+            report["gates"].insert(0, {"gate": "Gate 0", "status": "approved", "by": approval_by, "rules_sha256_12": _sha_obj(built_setup["pack"])[:12],
+                                       "scope_sha256_12": _sha_obj(built_setup["scope"])[:12], "held_for_gate2": unconfirmed[:20]})
+        elif unconfirmed:
             report["gates"].insert(0, {"gate": "Gate 0", "status": "open", "unconfirmed_rules": len(unconfirmed), "which": unconfirmed[:20],
                                        "fix": 'set "source": "user_confirmed" on each rule once the person has agreed to it'})
     _produce(OUT_DIR, report, lines, opportunities, queue, False)
@@ -1289,7 +1383,7 @@ def _propose(reporting_override=None):
 SETUP_NAME = "setup.json"
 ASK = "<ask>"
 _SETUP_KEYS = {"_doc", "confirmed_by", "category", "project", "reporting_currency", "window", "date_formats",
-               "unit_pack_sizes", "fx_rates", "freight_terms", "confirm", "products"}
+               "unit_pack_sizes", "fx_rates", "freight_terms", "confirm", "products", "approval"}
 _SKIP_WORDS = {"unknown", "skip", "leave out", "leave_out", "none", "n/a", "dont know", "don't know"}
 
 
@@ -1572,6 +1666,8 @@ def setup():
            "status": "SETUP_NEEDS_INPUT" if qs else "SETUP_READY",
            "plain_summary": (f"{len(qs)} question(s) still open." if qs else "Everything is answered. rules.json and scope.json are built and tagged user_confirmed."),
            "questions": qs, "recorded": built["recorded"], "setup_template": built["template"], "wrote_files": []}
+    plants = _plant_card(built["base"]["scan"])
+    out["case_card_text"] = _case_text(plants, "open", "", "", built["recorded"], len(qs), None)
     if qs:
         out["next_step"] = ("Ask ALL open questions in one message, in plain language. When the person answers, put every answer into setup.json "
                             "(start from setup_template, write the whole file once) and run --mode setup once more.")
@@ -1586,8 +1682,12 @@ def setup():
             _emit(os.path.join(OUT_DIR, name), json.dumps(content, indent=2, ensure_ascii=False) + "\n")
             written.append(f"{OUT_DIR}/{name}")
         out["wrote_files"] = written
-        out["next_step"] = ("Show the person rules.json and scope.json (print them and offer save_output_file for both). Ask: 'Is this right?'. "
-                            "When they confirm, write decisions.json with their Gate 1 confirmation and run --mode run once. Do not ask the questions again.")
+        tok = _approval_token(built["pack"], built["scope"], _scope_plant_hashes(built["scope"]))
+        out["approval_template"] = {"approved": True, "by": built["template"].get("confirmed_by", ""), **tok}
+        out["case_card_text"] = _case_text(plants, "built, waiting for the person's approval", tok["rules_sha256"][:12], tok["scope_sha256"][:12], built["recorded"], 0, None)
+        out["next_step"] = ("Print rules.json and scope.json in full in the chat, then ask: 'Do you approve these as the official rules and scope?'. "
+                            "On yes, copy approval_template into setup.json under the key 'approval' (change nothing in it), read setup.json back, and run --mode run once in the same turn. "
+                            "Gate 0 approval also counts as the Gate 1 scope confirmation. Do not ask the questions again.")
     return out
 
 
@@ -2029,7 +2129,7 @@ def main():
         return 0 if result["result"] == "PASS" else 1
     result = generate()
     print(json.dumps(_plain(result), indent=2, ensure_ascii=False))
-    return 0 if result.get("status") in ("FINAL", "DRAFT", "STOPPED_AT_GATE_1", "STOPPED_RECONCILIATION") else 1
+    return 0 if result.get("status") in ("FINAL", "DRAFT", "STOPPED_AT_GATE_0", "STOPPED_AT_GATE_1", "STOPPED_RECONCILIATION") else 1
 
 
 if __name__ == "__main__":
